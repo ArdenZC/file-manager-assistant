@@ -15,10 +15,10 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.electron.json",
     "security:audit": "npm audit --audit-level=high",
     "verify": "npm run typecheck && npm test && npm run build && npm run security:audit",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --ia32 --arm64",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm --x64 --arm64"
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --ia32 --arm64 --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64 --publish never",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm --x64 --arm64 --publish never"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -100,6 +100,7 @@
     },
     "linux": {
       "category": "Utility",
+      "maintainer": "Startlan <startlan@users.noreply.github.com>",
       "target": [
         {
           "target": "AppImage",
