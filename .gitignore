@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-electron/
+coverage/
+*.log
+*.sqlite
+*.sqlite-journal
+.vite/
+.DS_Store
+Thumbs.db
+
