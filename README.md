@@ -1,21 +1,23 @@
 # Zen Canvas
 
-<p align="center">
+<div align="center">
   <img src="docs/banner_zh.svg" width="100%" alt="Zen Canvas Banner" />
-</p>
+</div>
 
-<p align="center">
-  语言切换：<b>简体中文</b> | <a href="README_en.md">English Edition ➔</a>
-</p>
+<br />
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Electron-v42.4.0-3178C6?style=flat-cube&logo=electron&logoColor=white" alt="Electron" />
-  <img src="https://img.shields.io/badge/React-v19.0.0-61DAFB?style=flat-cube&logo=react&logoColor=black" alt="React" />
-  <img src="https://img.shields.io/badge/TypeScript-v5.8.3-3178C6?style=flat-cube&logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/SQLite-FTS5-003B57?style=flat-cube&logo=sqlite&logoColor=white" alt="SQLite" />
-  <img src="https://img.shields.io/github/actions/workflow/status/ArdenZC/file-manager-assistant/release-build.yml?style=flat-cube&label=CI%2FCD" alt="Build Status" />
-  <img src="https://img.shields.io/github/license/ArdenZC/file-manager-assistant?style=flat-cube&color=emerald" alt="License" />
-</p>
+<div align="center">
+  <a href="README_en.md">
+    <img src="[https://img.shields.io/badge/](https://img.shields.io/badge/)🌐_Switch_To_English_Edition-0f172a?style=for-the-badge&logoColor=white" alt="English Edition" />
+  </a>
+</div>
+
+<div align="center">
+  <img src="[https://img.shields.io/badge/Electron-3178C6?style=for-the-badge&logo=electron&logoColor=white](https://img.shields.io/badge/Electron-3178C6?style=for-the-badge&logo=electron&logoColor=white)" alt="Electron" />
+  <img src="[https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)" alt="React" />
+  <img src="[https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)" alt="TypeScript" />
+  <img src="[https://img.shields.io/badge/SQLite_FTS5-003B57?style=for-the-badge&logo=sqlite&logoColor=white](https://img.shields.io/badge/SQLite_FTS5-003B57?style=for-the-badge&logo=sqlite&logoColor=white)" alt="SQLite" />
+</div>
 
 ---
 
@@ -67,3 +69,35 @@ Zen Canvas 拒绝直接对您的原始文件进行破坏性修改。扫描后，
                │    Local SQLite WAL    │  │  Chokidar File Watcher │
                │   (FTS5 Search Index)  │  │ (Stale Source Tracker) │
                └────────────────────────┘  └────────────────────────┘
+
+---
+💻 快速开始 (Development)
+在开始前，请确保您的本地开发环境已经安装了 Node.js (>= 22)。
+
+Bash
+# 1. 克隆并进入仓库
+git clone https://github.com/ArdenZC/file-manager-assistant.git
+cd file-manager-assistant
+
+# 2. 安装本地原生依赖 (自动触发 better-sqlite3 二进制编译)
+npm install
+
+# 3. 启动双进程开发热更新环境 (Electron + Vite)
+npm run dev
+
+# 4. 执行严苛的单元测试与10万级 FTS 性能测试
+npm run verify
+🚀 自动化构建与发行
+GitHub Actions 工作流（.github/workflows/release-build.yml）已完全打通。当向远程推送以 v* 开头的 Tag 时，将全自动触发云端双端构建：
+
+Bash
+# 全维质量校验
+npm run typecheck        # TypeScript 静态检查
+npm test                 # 逻辑单元测试
+npm run test:performance # 性能跑分测试
+
+# 本地打包 Windows 安装包
+npm run dist:win         # 生成 NSIS 安装程序及绿色版 ZIP
+
+# 本地打包 macOS 安装包
+npm run dist:mac         # 生成 DMG 磁盘镜像及压缩包
