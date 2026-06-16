@@ -1,39 +1,60 @@
-<!-- Orb Glow Effect -->
-<filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-  <feGaussianBlur stdDeviation="25" result="blur" />
-  <feMerge>
-    <feMergeNode in="blur" />
-    <feMergeNode in="SourceGraphic" />
-  </feMerge>
-</filter>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 260" width="100%">
+  <rect width="800" height="260" rx="24" fill="#0f172a" stroke="#1e293b" stroke-width="2"/>
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="25" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <linearGradient id="orbGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#007AFF" />
+      <stop offset="100%" stop-color="#34C759" />
+    </linearGradient>
+    <linearGradient id="glassGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.02" />
+    </linearGradient>
+    <linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#94A3B8" />
+    </linearGradient>
+  </defs>
 
-<!-- Glass Blur Simulation -->
-<filter id="glass-blur">
-  <feGaussianBlur stdDeviation="3" />
-  <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" />
-</filter>
+  <!-- Deep Space Ambient Orbs (Behind) -->
+  <circle cx="200" cy="130" r="140" fill="#1e3a8a" fill-opacity="0.25" filter="url(#glow)" />
+  <circle cx="650" cy="150" r="100" fill="#4c1d95" fill-opacity="0.2" filter="url(#glow)" />
 
-<!-- Glowing Gradients -->
-<linearGradient id="orbGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-  <stop offset="0%" stop-color="#007AFF" />
-  <stop offset="100%" stop-color="#34C759" />
-</linearGradient>
-<linearGradient id="glassGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-  <stop offset="0%" stop-color="rgba(255, 255, 255, 0.15)" />
-  <stop offset="100%" stop-color="rgba(255, 255, 255, 0.02)" />
-</linearGradient>
-<linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-  <stop offset="0%" stop-color="#FFFFFF" />
-  <stop offset="100%" stop-color="#94A3B8" />
-</linearGradient>
+  <!-- Abstract Wave Lines (Order Tracks) -->
+  <path d="M-100 130 C 200 50, 400 210, 900 130" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="2" />
+  <path d="M-100 150 C 150 210, 450 50, 900 150" fill="none" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1.5" />
 
+  <!-- The Brand Mark: Sphere + Glass Canvas -->
+  <g transform="translate(110, 130)">
+    <!-- 1. The Glowing Core Orb (Representing Chaos Assets) -->
+    <circle cx="25" cy="-25" r="38" fill="url(#orbGradient)" filter="url(#glow)" opacity="0.9" />
+    
+    <!-- 2. The Glass Canvas Overlay (Representing Order / Shield) -->
+    <rect x="-45" y="-15" width="64" height="64" rx="18" fill="url(#glassGradient)" stroke="#ffffff" stroke-opacity="0.25" stroke-width="1.5" />
+    <!-- Inner Gloss Highlights -->
+    <rect x="-44" y="-14" width="62" height="62" rx="17" fill="none" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1" />
+  </g>
 
-Zen Canvas
-PERSONAL DIGITAL ASSET STEWARD
-Local-first file lifecycle manager powered by SQLite FTS5 & Electron
+  <!-- Title and Subtitle Text -->
+  <text x="240" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="44" font-weight="700" fill="url(#textGradient)" letter-spacing="-1">Zen Canvas</text>
+  <text x="242" y="152" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#34C759" letter-spacing="4">个人数字资产管家</text>
+  <text x="242" y="180" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="400" fill="#64748B" letter-spacing="0.5">基于 SQLite FTS5 与 Electron 的本地优先文件生命周期管理器</text>
 
-<rect x="85" y="0" width="55" height="20" rx="6" fill="rgba(52, 199, 89, 0.12)" stroke="rgba(52, 199, 89, 0.25)" stroke-width="1"/>
-<text x="98" y="13" fill="#86EFAC">REACT</text>
+  <!-- Tech Tags -->
+  <g transform="translate(242, 205)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="10" font-weight="700" letter-spacing="1">
+    <rect x="0" y="0" width="75" height="20" rx="6" fill="#3b82f6" fill-opacity="0.15" stroke="#3b82f6" stroke-opacity="0.3" stroke-width="1"/>
+    <text x="12" y="13" fill="#60A5FA">ELECTRON</text>
 
-<rect x="150" y="0" width="55" height="20" rx="6" fill="rgba(245, 158, 11, 0.12)" stroke="rgba(245, 158, 11, 0.25)" stroke-width="1"/>
-<text x="165" y="13" fill="#FCD34D">SQLITE</text>
+    <rect x="85" y="0" width="55" height="20" rx="6" fill="#34c759" fill-opacity="0.12" stroke="#34c759" stroke-opacity="0.25" stroke-width="1"/>
+    <text x="98" y="13" fill="#86EFAC">REACT</text>
+
+    <rect x="150" y="0" width="55" height="20" rx="6" fill="#f59e0b" fill-opacity="0.12" stroke="#f59e0b" stroke-opacity="0.25" stroke-width="1"/>
+    <text x="165" y="13" fill="#FCD34D">SQLITE</text>
+  </g>
+</svg>
