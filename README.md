@@ -1,4 +1,6 @@
-🌌 Zen Canvas
+Zen Canvas
+
+🌌 简介
 
 本地优先 (Local-First) 的桌面个人文件生命周期管家。
 它不是传统资源管理器的粗暴替代者，也不是冷冰冰的文件批量分类脚本，而是一个将「全盘扫描 ➔ 智能理解 ➔ 方案预览 ➔ 安全操作 ➔ 时光机回滚」完美串联的安全闭环。
@@ -7,7 +9,7 @@
 
 全息雷达析构：主视窗搭载动态 Conic-Gradient 雷达扫描仪与数据可视化 Metrics，以物理直觉呈现当前工作区的净化状态。
 
-VisionOS 材质粒子：全局采用重度模糊高饱和毛玻璃（.glass-panel）与三轨道漫反射漂移光斑（.orb），完美自适应系统深浅双轨主题（Glacier Light & Deep Sea Dark）。
+VisionOS 材质粒子：全局采用重度模糊高饱和毛玻璃与三轨道漫反射漂移光斑，完美自适应系统深浅双轨主题。
 
 Spotlight 极速全局检索：常驻顶部中央，通过 Ctrl/Cmd + K 唤起。搭载高性能本地 FTS5 引擎，实现 10万级别 文件检索 <100ms 的极致性能。
 
@@ -74,7 +76,7 @@ Zen Canvas 拒绝直接对您的原始文件进行破坏性修改。扫描后，
 在开始前，请确保您的本地开发环境已经安装了 Node.js (>= 22)。
 
 # 1. 克隆并进入仓库
-git clone https://github.com/ArdenZC/file-manager-assistant.git
+git clone [https://github.com/ArdenZC/file-manager-assistant.git](https://github.com/ArdenZC/file-manager-assistant.git)
 cd file-manager-assistant
 
 # 2. 安装本地原生依赖 (自动触发 better-sqlite3 二进制编译)
@@ -89,7 +91,7 @@ npm run verify
 
 🚀 自动化构建与发行
 
-GitHub Actions 工作流（.github/workflows/release-build.yml）已完全打通。当向远程推送以 v* 开头的 Tag时，将全自动触发云端双端构建：
+GitHub Actions 工作流（.github/workflows/release-build.yml）已完全打通。当向远程推送以 v* 开头的 Tag 时，将全自动触发云端双端构建：
 
 # 全维质量校验
 npm run typecheck       # TypeScript 静态检查
