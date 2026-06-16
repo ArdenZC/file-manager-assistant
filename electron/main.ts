@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, session, shell } from "electron";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { watch } from "chokidar";
 import { Database } from "../src/core/database.js";
 import { scanDefaultRoots, scanRoots } from "../src/core/fileScanner.js";
@@ -14,7 +15,8 @@ let searchWatcher: ReturnType<typeof watch> | null = null;
 let registeredSearchHotkey = "CommandOrControl+K";
 let isQuitting = false;
 
-const isDev = process.env.VITE_DEV_SERVER_URL || process.env.NODE_ENV === "development";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isDev: boolean = Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.NODE_ENV === "development";
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -25,9 +27,9 @@ async function createWindow() {
     title: "Zen Canvas",
     backgroundColor: "#0a0f1a",
     frame: process.platform === "darwin",
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     webPreferences: {
-      preload: path.join(app.getAppPath(), "dist-electron/electron/preload.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -48,7 +50,7 @@ async function createWindow() {
   if (isDev) {
     await mainWindow.loadURL("http://127.0.0.1:5173");
   } else {
-    await mainWindow.loadFile(path.join(app.getAppPath(), "dist/index.html"));
+    await mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
 
   mainWindow.on("close", (event) => {
@@ -266,21 +268,27 @@ async function refreshSearchWatcher() {
 }
 
 app.whenReady().then(async () => {
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
-  });
+  try {
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+      callback(false);
+    });
 
-  db = await Database.open(app.getPath("userData"));
-  registerIpc();
-  await createWindow();
-  registerSearchHotkey(db.getSetting("searchHotkey") ?? "CommandOrControl+K");
-  await refreshSearchWatcher();
+    db = await Database.open(app.getPath("userData"));
+    registerIpc();
+    await createWindow();
+    registerSearchHotkey(db.getSetting("searchHotkey") ?? "CommandOrControl+K");
+    await refreshSearchWatcher();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow();
-    }
-  });
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        void createWindow();
+      }
+    });
+  } catch (error) {
+    console.error("[Zen Canvas] Startup failed:", error);
+    dialog.showErrorBox("Zen Canvas startup failed", error instanceof Error ? error.message : String(error));
+    app.quit();
+  }
 });
 
 app.on("window-all-closed", () => {

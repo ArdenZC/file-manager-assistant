@@ -115,11 +115,10 @@ button:disabled {
   position: relative;
   z-index: 4;
   height: 56px;
-  display: grid;
-  grid-template-columns: 210px minmax(260px, 1fr) 210px;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  padding: 0 18px;
+  padding: 0;
   background: rgba(255, 255, 255, 0.36);
   border-bottom: 1px solid var(--line-dark);
   backdrop-filter: blur(30px) saturate(180%);
@@ -132,19 +131,47 @@ button:disabled {
 }
 
 .window-controls,
+.titlebar-left,
+.titlebar-center,
+.titlebar-right,
+.titlebar-tools,
+.win-controls,
+.win-btn,
 .spotlight-trigger,
-.titlebar-actions,
 .round-tool,
 .lang-toggle,
 .traffic-dot {
   -webkit-app-region: no-drag;
 }
 
+.titlebar-left,
+.titlebar-right {
+  width: 210px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.titlebar-left {
+  justify-content: flex-start;
+  padding-left: 18px;
+}
+
+.titlebar-right {
+  justify-content: flex-end;
+}
+
+.titlebar-center {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  justify-content: center;
+}
+
 .window-controls {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding-left: 10px;
 }
 
 .traffic-dot {
@@ -212,11 +239,11 @@ kbd {
   background: rgba(0, 0, 0, 0.3);
 }
 
-.titlebar-actions {
-  justify-self: end;
+.titlebar-tools {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding-right: 18px;
 }
 
 .round-tool,
@@ -252,6 +279,51 @@ kbd {
   gap: 6px;
   font-size: 12px;
   font-weight: 760;
+}
+
+.win-controls {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+
+.win-btn {
+  width: 48px;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  background: transparent;
+  cursor: default;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.win-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.dark .win-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.win-btn.close:hover {
+  background: #e81123 !important;
+  color: #fff !important;
+}
+
+.native-titlebar.is-windows .titlebar-left {
+  padding-left: 14px;
+}
+
+.native-titlebar.is-windows .titlebar-left .titlebar-tools {
+  padding-right: 0;
+}
+
+.native-titlebar.is-windows .titlebar-tools {
+  padding-right: 0;
 }
 
 .zen-shell {

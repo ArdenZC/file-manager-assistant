@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   ListChecks,
   LockKeyhole,
+  Minus,
   Moon,
   Play,
   Plus,
@@ -24,6 +25,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Sun,
   X
 } from "lucide-react";
@@ -111,7 +113,10 @@ export function App() {
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [previewNameOverrides, setPreviewNameOverrides] = useState<Record<string, string>>({});
   const commandInputRef = useRef<HTMLInputElement | null>(null);
-  const hasNativeApi = typeof window.fileManager !== "undefined";
+  const fileManager = window.fileManager;
+  const platform = fileManager?.platform ?? detectBrowserPlatform();
+  const isWindows = platform === "win32";
+  const hasNativeApi = typeof fileManager !== "undefined";
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -119,14 +124,14 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (!hasNativeApi) return;
-    window.fileManager.getSnapshot().then((next) => {
+    if (!fileManager) return;
+    fileManager.getSnapshot().then((next) => {
       if (next.files.length) {
         setSnapshot(next);
         setSelectedFileId(next.files[0]?.id ?? "");
       }
     });
-  }, [hasNativeApi]);
+  }, [fileManager]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -143,14 +148,14 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = window.fileManager?.onCommandOpen?.(() => setIsCommandOpen(true));
+    const unsubscribe = fileManager?.onCommandOpen?.(() => setIsCommandOpen(true));
     return () => unsubscribe?.();
-  }, []);
+  }, [fileManager]);
 
   useEffect(() => {
-    const unsubscribe = window.fileManager?.onCommandHide?.(() => setIsCommandOpen(false));
+    const unsubscribe = fileManager?.onCommandHide?.(() => setIsCommandOpen(false));
     return () => unsubscribe?.();
-  }, []);
+  }, [fileManager]);
 
   useEffect(() => {
     if (isCommandOpen) {
@@ -199,8 +204,8 @@ export function App() {
   }
 
   async function refreshSnapshot() {
-    if (!hasNativeApi) return;
-    const next = await window.fileManager.getSnapshot();
+    if (!fileManager) return;
+    const next = await fileManager.getSnapshot();
     setSnapshot(next);
     setSelectedFileId(next.files[0]?.id ?? "");
   }
@@ -208,8 +213,8 @@ export function App() {
   async function handleScan() {
     setIsScanning(true);
     try {
-      if (hasNativeApi) {
-        await window.fileManager.scanDefaults();
+      if (fileManager) {
+        await fileManager.scanDefaults();
         await refreshSnapshot();
         setStatus(t("success"));
       } else {
@@ -226,14 +231,14 @@ export function App() {
   async function handleChooseFolders() {
     setIsScanning(true);
     try {
-      if (hasNativeApi) {
-        const result: FolderScanResult = await window.fileManager.chooseAndScanFolders();
+      if (fileManager) {
+        const result: FolderScanResult = await fileManager.chooseAndScanFolders();
         if (result.canceled) {
           setStatus(t("noFolderSelected"));
           return;
         }
         setSelectedFolders(result.selectedPaths);
-        const next = await window.fileManager.getSnapshot();
+        const next = await fileManager.getSnapshot();
         setSnapshot(next);
         setSelectedFileId(next.files[0]?.id ?? "");
         setStatus(`${t("success")}: ${result.selectedPaths.length} / ${next.files.length}`);
@@ -251,9 +256,9 @@ export function App() {
   }
 
   async function saveRule(rule: Rule) {
-    if (hasNativeApi) {
-      await window.fileManager.saveRule(rule);
-      const next = await window.fileManager.reapplyRules();
+    if (fileManager) {
+      await fileManager.saveRule(rule);
+      const next = await fileManager.reapplyRules();
       setSnapshot(next);
     } else {
       setSnapshot((current) => ({ ...current, rules: [...current.rules, rule] }));
@@ -263,15 +268,15 @@ export function App() {
   async function executeSelected() {
     const operations = displayPreviews.filter((preview) => selectedOperationIds.has(preview.id) && preview.is_executable !== false);
     if (!operations.length) return;
-    if (hasNativeApi) {
-      await window.fileManager.executeOperations({ operations });
+    if (fileManager) {
+      await fileManager.executeOperations({ operations });
       await refreshSnapshot();
     }
     setSelectedOperationIds(new Set());
   }
 
   function handleWindowAction(action: "minimize" | "maximize" | "close") {
-    void window.fileManager?.windowControl?.(action);
+    void fileManager?.windowControl?.(action);
   }
 
   const activeLabel = nav.find((item) => item.id === view)?.label ?? t("spaceScan");
@@ -280,37 +285,64 @@ export function App() {
     <div className="zen-app">
       <div className="ambient-layer" aria-hidden="true" />
 
-      <header className="native-titlebar">
-        <div className="window-controls" aria-label="Window controls">
-          <button className="traffic-dot red" onClick={() => handleWindowAction("close")} aria-label={t("close")} />
-          <button
-            className="traffic-dot yellow"
-            onClick={() => handleWindowAction("minimize")}
-            aria-label={t("minimize")}
-          />
-          <button
-            className="traffic-dot green"
-            onClick={() => handleWindowAction("maximize")}
-            aria-label={t("maximize")}
-          />
+      <header className={`native-titlebar ${isWindows ? "is-windows" : "is-macos"}`}>
+        <div className="titlebar-left">
+          {!isWindows ? (
+            <div className="window-controls" aria-label="Window controls">
+              <button className="traffic-dot red" onClick={() => handleWindowAction("close")} aria-label={t("close")} />
+              <button
+                className="traffic-dot yellow"
+                onClick={() => handleWindowAction("minimize")}
+                aria-label={t("minimize")}
+              />
+              <button
+                className="traffic-dot green"
+                onClick={() => handleWindowAction("maximize")}
+                aria-label={t("maximize")}
+              />
+            </div>
+          ) : (
+            <TitlebarTools
+              language={language}
+              theme={theme}
+              setLanguage={setLanguage}
+              setTheme={setTheme}
+            />
+          )}
         </div>
 
-        <button className="spotlight-trigger" onClick={() => setIsCommandOpen(true)}>
-          <Search size={15} />
-          <span>{t("globalSearch")}</span>
-          <kbd>
-            <Command size={12} />K
-          </kbd>
-        </button>
+        <div className="titlebar-center">
+          <button className="spotlight-trigger" onClick={() => setIsCommandOpen(true)}>
+            <Search size={15} />
+            <span>{t("globalSearch")}</span>
+            <kbd>
+              {isWindows ? <span>Ctrl</span> : <Command size={12} />}
+              <span>K</span>
+            </kbd>
+          </button>
+        </div>
 
-        <div className="titlebar-actions">
-          <button className="round-tool" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
-          </button>
-          <button className="lang-toggle" onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>
-            <Languages size={16} />
-            <span>{language === "zh" ? "EN" : "中文"}</span>
-          </button>
+        <div className="titlebar-right">
+          {!isWindows ? (
+            <TitlebarTools
+              language={language}
+              theme={theme}
+              setLanguage={setLanguage}
+              setTheme={setTheme}
+            />
+          ) : (
+            <div className="win-controls" aria-label="Window controls">
+              <button className="win-btn" onClick={() => handleWindowAction("minimize")} aria-label={t("minimize")}>
+                <Minus size={15} strokeWidth={1.6} />
+              </button>
+              <button className="win-btn" onClick={() => handleWindowAction("maximize")} aria-label={t("maximize")}>
+                <Square size={12} strokeWidth={1.6} />
+              </button>
+              <button className="win-btn close" onClick={() => handleWindowAction("close")} aria-label={t("close")}>
+                <X size={16} strokeWidth={1.6} />
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -452,6 +484,30 @@ function ZenMark() {
     <div className="zen-mark" aria-hidden="true">
       <span className="zen-orb" />
       <span className="zen-glass" />
+    </div>
+  );
+}
+
+function TitlebarTools({
+  language,
+  theme,
+  setLanguage,
+  setTheme
+}: {
+  language: Language;
+  theme: ThemeMode;
+  setLanguage: (language: Language) => void;
+  setTheme: (theme: ThemeMode) => void;
+}) {
+  return (
+    <div className="titlebar-tools">
+      <button className="round-tool" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+        {theme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
+      </button>
+      <button className="lang-toggle" onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>
+        <Languages size={16} />
+        <span>{language === "zh" ? "EN" : "中文"}</span>
+      </button>
     </div>
   );
 }
@@ -936,30 +992,31 @@ function RestoreView({ hasNativeApi, t }: { hasNativeApi: boolean; t: Translator
   const [selectedBatch, setSelectedBatch] = useState("");
   const [preview, setPreview] = useState<RestorePreview | null>(null);
   const [restoreStatus, setRestoreStatus] = useState("");
+  const fileManager = window.fileManager;
 
   useEffect(() => {
-    if (!hasNativeApi) return;
-    window.fileManager.getRestoreBatches().then((next) => {
+    if (!fileManager) return;
+    fileManager.getRestoreBatches().then((next) => {
       setBatches(next);
       setSelectedBatch(next[0]?.batch_id ?? "");
     }).catch(() => undefined);
-  }, [hasNativeApi]);
+  }, [fileManager]);
 
   useEffect(() => {
-    if (!hasNativeApi || !selectedBatch) {
+    if (!fileManager || !selectedBatch) {
       setPreview(null);
       return;
     }
-    window.fileManager.getRestorePreview(selectedBatch).then(setPreview).catch(() => setPreview(null));
-  }, [hasNativeApi, selectedBatch]);
+    fileManager.getRestorePreview(selectedBatch).then(setPreview).catch(() => setPreview(null));
+  }, [fileManager, selectedBatch]);
 
   async function restoreSelectedBatch() {
-    if (!hasNativeApi || !selectedBatch) return;
-    const result = await window.fileManager.restoreBatch(selectedBatch);
+    if (!fileManager || !selectedBatch) return;
+    const result = await fileManager.restoreBatch(selectedBatch);
     setRestoreStatus(`${t("restored")}: ${result.restored}, ${t("failed")}: ${result.failed}, ${t("skipped")}: ${result.skipped}`);
-    const next = await window.fileManager.getRestoreBatches();
+    const next = await fileManager.getRestoreBatches();
     setBatches(next);
-    setPreview(await window.fileManager.getRestorePreview(selectedBatch));
+    setPreview(await fileManager.getRestorePreview(selectedBatch));
   }
 
   return (
@@ -1049,44 +1106,45 @@ function SettingsView({
   const [sources, setSources] = useState<SearchSource[]>(snapshot.searchSources);
   const [hotkey, setHotkey] = useState("CommandOrControl+K");
   const [settingsStatus, setSettingsStatus] = useState("");
+  const fileManager = window.fileManager;
 
   useEffect(() => {
     setSources(snapshot.searchSources);
   }, [snapshot.searchSources]);
 
   useEffect(() => {
-    if (!hasNativeApi) return;
-    window.fileManager.getSearchHotkey().then(setHotkey).catch(() => undefined);
-    window.fileManager.getSearchSources().then(setSources).catch(() => undefined);
-  }, [hasNativeApi]);
+    if (!fileManager) return;
+    fileManager.getSearchHotkey().then(setHotkey).catch(() => undefined);
+    fileManager.getSearchSources().then(setSources).catch(() => undefined);
+  }, [fileManager]);
 
   async function toggleSource(id: string) {
     const next = sources.map((source) => source.id === id ? { ...source, enabled: !source.enabled } : source);
     setSources(next);
-    if (hasNativeApi) {
-      const saved = await window.fileManager.updateSearchSources(next);
+    if (fileManager) {
+      const saved = await fileManager.updateSearchSources(next);
       setSources(saved);
-      setSnapshot(await window.fileManager.getSnapshot());
+      setSnapshot(await fileManager.getSnapshot());
     }
   }
 
   async function saveHotkey() {
-    if (!hasNativeApi) {
+    if (!fileManager) {
       setSettingsStatus(t("desktopOnlySetting"));
       return;
     }
-    const result = await window.fileManager.setSearchHotkey(hotkey);
+    const result = await fileManager.setSearchHotkey(hotkey);
     setSettingsStatus(result.ok ? t("hotkeySaved") : t("hotkeyConflict"));
     setHotkey(result.hotkey);
   }
 
   async function rebuildIndex() {
-    if (!hasNativeApi) {
+    if (!fileManager) {
       setSettingsStatus(t("desktopOnlySetting"));
       return;
     }
-    await window.fileManager.rebuildSearchIndex();
-    setSnapshot(await window.fileManager.getSnapshot());
+    await fileManager.rebuildSearchIndex();
+    setSnapshot(await fileManager.getSnapshot());
     setSettingsStatus(t("indexRebuilt"));
   }
 
@@ -1218,7 +1276,8 @@ function CommandModal({
   const [search, setSearch] = useState("");
   const [nativeResults, setNativeResults] = useState<SearchResult[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const hasNativeApi = typeof window.fileManager !== "undefined";
+  const fileManager = window.fileManager;
+  const hasNativeApi = typeof fileManager !== "undefined";
   const fallbackResults: SearchResult[] = files
     .filter((file) => `${file.name} ${file.path} ${file.purpose}`.toLowerCase().includes(search.toLowerCase()))
     .slice(0, 8)
@@ -1226,9 +1285,9 @@ function CommandModal({
   const results = hasNativeApi ? nativeResults : fallbackResults;
 
   useEffect(() => {
-    if (!hasNativeApi) return;
+    if (!fileManager) return;
     const timer = window.setTimeout(() => {
-      window.fileManager.searchQuery({ query: search, limit: 12 })
+      fileManager.searchQuery({ query: search, limit: 12 })
         .then((next) => {
           setNativeResults(next);
           setActiveIndex(0);
@@ -1236,18 +1295,18 @@ function CommandModal({
         .catch(() => setNativeResults([]));
     }, 40);
     return () => window.clearTimeout(timer);
-  }, [hasNativeApi, search]);
+  }, [fileManager, search]);
 
   async function openFile(file: FileRecord) {
-    if (hasNativeApi) {
-      await window.fileManager.openSearchResult(file.id);
+    if (fileManager) {
+      await fileManager.openSearchResult(file.id);
     }
     onClose();
   }
 
   async function revealFile(file: FileRecord) {
-    if (hasNativeApi) {
-      await window.fileManager.revealSearchResult(file.id);
+    if (fileManager) {
+      await fileManager.revealSearchResult(file.id);
     }
   }
 
@@ -1721,6 +1780,16 @@ function preferredTheme(): ThemeMode {
   const stored = window.localStorage.getItem("zc-theme");
   if (stored === "light" || stored === "dark") return stored;
   return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+}
+
+function detectBrowserPlatform(): NodeJS.Platform | "browser" {
+  if (typeof navigator === "undefined") return "browser";
+  const platform = navigator.platform.toLowerCase();
+  const userAgent = navigator.userAgent.toLowerCase();
+  if (platform.includes("win") || userAgent.includes("windows")) return "win32";
+  if (platform.includes("mac") || userAgent.includes("mac os")) return "darwin";
+  if (platform.includes("linux") || userAgent.includes("linux")) return "linux";
+  return "browser";
 }
 
 function readableError(error: unknown): string {

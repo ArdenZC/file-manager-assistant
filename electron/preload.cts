@@ -72,5 +72,3 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld("fileManager", api);
-
-export type FileManagerApi = typeof api;

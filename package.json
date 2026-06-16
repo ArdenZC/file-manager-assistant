@@ -13,12 +13,15 @@
     "build": "tsc -p tsconfig.json && vite build && tsc -p tsconfig.electron.json",
     "test": "vitest run",
     "test:performance": "node scripts/runPerformanceTest.mjs",
+    "rebuild:native": "npm rebuild better-sqlite3",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.electron.json",
     "security:audit": "npm audit --audit-level=high",
     "verify": "npm run typecheck && npm test && npm run test:performance && npm run build && npm run security:audit",
     "dist": "npm run build && electron-builder --win nsis zip --mac dmg zip --publish never",
     "dist:win": "npm run build && electron-builder --win nsis zip --x64 --ia32 --arm64 --publish never",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64 --publish never"
+    "postdist:win": "npm run rebuild:native",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64 --publish never",
+    "postdist:mac": "npm run rebuild:native"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
@@ -54,6 +57,10 @@
       "package.json"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "**/node_modules/better-sqlite3/**"
+    ],
     "npmRebuild": true,
     "win": {
       "target": [

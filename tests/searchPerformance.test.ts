@@ -7,7 +7,7 @@ import { Database } from "../src/core/database";
 import type { FileRecord, ScanRoot } from "../src/types/domain";
 
 let tempDir = "";
-let database: Database;
+let database: Database | null = null;
 
 beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zc-perf-"));
@@ -15,29 +15,36 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  database.close();
+  database?.close();
+  database = null;
   if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
 });
 
 describe.skipIf(process.env.RUN_PERF_100K !== "1")("100k local search performance", () => {
   it("returns first-page FTS results under the MVP latency target", { timeout: 120_000 }, () => {
     const root = path.join(tempDir, "Downloads");
-    database.upsertScanRoots([makeRoot(root)]);
+    const db = expectDatabase();
+    db.upsertScanRoots([makeRoot(root)]);
 
     const files: FileRecord[] = Array.from({ length: 100_000 }, (_, index) => {
       const prefix = index % 1000 === 0 ? "resume" : index % 997 === 0 ? "invoice" : "document";
       return makeFile(path.join(root, `${prefix}_${String(index).padStart(6, "0")}.pdf`), index);
     });
-    database.upsertFiles(files);
+    db.upsertFiles(files);
 
     const start = performance.now();
-    const results = database.searchFiles({ query: "resume ext:pdf", limit: 20 });
+    const results = db.searchFiles({ query: "resume ext:pdf", limit: 20 });
     const duration = performance.now() - start;
 
     expect(results.length).toBeGreaterThan(0);
     expect(duration).toBeLessThan(100);
   });
 });
+
+function expectDatabase(): Database {
+  if (!database) throw new Error("Database was not initialized");
+  return database;
+}
 
 function makeRoot(rootPath: string): ScanRoot {
   const now = new Date().toISOString();

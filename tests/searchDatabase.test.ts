@@ -6,7 +6,7 @@ import { Database } from "../src/core/database";
 import type { FileRecord, ScanRoot } from "../src/types/domain";
 
 let tempDir = "";
-let database: Database;
+let database: Database | null = null;
 
 beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zc-db-"));
@@ -14,7 +14,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  database.close();
+  database?.close();
+  database = null;
   if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -22,39 +23,46 @@ describe("SQLite FTS search database", () => {
   it("indexes filenames, paths, extension filters, and source switches", () => {
     const rootA = path.join(tempDir, "Downloads");
     const rootB = path.join(tempDir, "Projects");
-    database.upsertScanRoots([makeRoot(rootA), makeRoot(rootB)]);
-    database.upsertFiles([
+    const db = expectDatabase();
+    db.upsertScanRoots([makeRoot(rootA), makeRoot(rootB)]);
+    db.upsertFiles([
       makeFile(path.join(rootA, "resume_2026.pdf"), "Career"),
       makeFile(path.join(rootA, "invoice_apple.pdf"), "Finance"),
       makeFile(path.join(rootB, "project_notes.md"), "Project")
     ]);
 
-    expect(database.searchFiles({ query: "resume ext:pdf" })[0].file.name).toBe("resume_2026.pdf");
-    expect(database.searchFiles({ query: "project notes" })[0].file.name).toBe("project_notes.md");
+    expect(db.searchFiles({ query: "resume ext:pdf" })[0].file.name).toBe("resume_2026.pdf");
+    expect(db.searchFiles({ query: "project notes" })[0].file.name).toBe("project_notes.md");
 
-    const sources = database.getSearchSources();
+    const sources = db.getSearchSources();
     const downloadSource = sources.find((source) => source.path === rootA);
     expect(downloadSource).toBeTruthy();
-    const filtered = database.searchFiles({ query: "project", sourceIds: [downloadSource!.id] });
+    const filtered = db.searchFiles({ query: "project", sourceIds: [downloadSource!.id] });
     expect(filtered).toHaveLength(0);
   });
 
   it("tracks opened files and stale source state", () => {
     const root = path.join(tempDir, "Downloads");
     const filePath = path.join(root, "resume_2026.pdf");
-    database.upsertScanRoots([makeRoot(root)]);
-    database.upsertFiles([makeFile(filePath, "Career")]);
+    const db = expectDatabase();
+    db.upsertScanRoots([makeRoot(root)]);
+    db.upsertFiles([makeFile(filePath, "Career")]);
 
-    const result = database.searchFiles({ query: "resume" })[0];
-    database.recordFileOpened(result.file.id);
-    database.markSearchSourceStaleByPath(filePath);
+    const result = db.searchFiles({ query: "resume" })[0];
+    db.recordFileOpened(result.file.id);
+    db.markSearchSourceStaleByPath(filePath);
 
-    const updated = database.getFileById(result.file.id);
+    const updated = db.getFileById(result.file.id);
     expect(updated?.open_count).toBe(1);
-    expect(database.getSearchIndexState().stale_sources).toBe(1);
-    expect(database.rebuildSearchIndex().stale_sources).toBe(0);
+    expect(db.getSearchIndexState().stale_sources).toBe(1);
+    expect(db.rebuildSearchIndex().stale_sources).toBe(0);
   });
 });
+
+function expectDatabase(): Database {
+  if (!database) throw new Error("Database was not initialized");
+  return database;
+}
 
 function makeRoot(rootPath: string): ScanRoot {
   const now = new Date().toISOString();
