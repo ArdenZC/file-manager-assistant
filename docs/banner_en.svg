@@ -43,8 +43,8 @@
 
   <!-- Title and Subtitle Text -->
   <text x="240" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="44" font-weight="700" fill="url(#textGradient)" letter-spacing="-1">Zen Canvas</text>
-  <text x="242" y="152" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#34C759" letter-spacing="4">个人数字资产管家</text>
-  <text x="242" y="180" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="400" fill="#64748B" letter-spacing="0.5">基于 SQLite FTS5 与 Electron 的本地优先文件生命周期管理器</text>
+  <text x="242" y="152" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#34C759" letter-spacing="4">PERSONAL DIGITAL ASSET STEWARD</text>
+  <text x="242" y="180" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="400" fill="#64748B" letter-spacing="0.5">Local-first file lifecycle manager powered by SQLite FTS5 &amp; Electron</text>
 
   <!-- Tech Tags -->
   <g transform="translate(242, 205)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="10" font-weight="700" letter-spacing="1">
