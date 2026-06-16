@@ -17,7 +17,7 @@
     "security:audit": "npm audit --audit-level=high",
     "verify": "npm run typecheck && npm test && npm run test:performance && npm run build && npm run security:audit",
     "dist": "npm run build && electron-builder --win nsis zip --mac dmg zip --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --ia32 --arm64 --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis zip --x64 --ia32 --arm64 --publish never",
     "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64 --publish never"
   },
   "dependencies": {
