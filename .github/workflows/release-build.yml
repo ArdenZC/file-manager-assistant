@@ -64,8 +64,18 @@ jobs:
           path: dist-packages/**
           if-no-files-found: error
 
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
       - name: Attach installers to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: Zen Canvas ${{ github.ref_name }}
@@ -75,5 +85,5 @@ jobs:
             - Windows: NSIS installer and portable zip, x64 / ia32 / arm64
             - macOS: dmg and zip, x64 / arm64
             - Local-first SQLite FTS search, preview execution, and 15-day restore records
-          files: dist-packages/**
+          files: release-artifacts/**
           fail_on_unmatched_files: true
