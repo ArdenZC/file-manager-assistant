@@ -87,6 +87,7 @@ npm run verify
 Zen Canvas currently ships unsigned public builds for Windows and macOS. Signing hooks are reserved for later.
 
 ```bash
+npm run assets:brand
 npm run dist:win
 npm run dist:mac
 ```

@@ -87,6 +87,7 @@ npm run verify
 本项目发布 Windows 和 macOS 未签名公开版，后续预留签名配置。
 
 ```bash
+npm run assets:brand
 npm run dist:win
 npm run dist:mac
 ```

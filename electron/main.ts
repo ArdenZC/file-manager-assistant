@@ -18,6 +18,7 @@ let isQuitting = false;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev: boolean = Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.NODE_ENV === "development";
+const appIconPath = path.join(__dirname, "../../build/icon.png");
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -26,6 +27,7 @@ async function createWindow() {
     minWidth: 1080,
     minHeight: 720,
     title: "Zen Canvas",
+    icon: process.platform === "darwin" ? undefined : appIconPath,
     backgroundColor: "#0a0f1a",
     frame: process.platform === "darwin",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
@@ -83,6 +85,7 @@ async function createSearchWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     transparent: true,
+    icon: process.platform === "darwin" ? undefined : appIconPath,
     backgroundColor: "#00000000",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -270,7 +273,9 @@ function registerIpc() {
 
   ipcMain.handle("shell:revealPath", async (_event, targetPath: string) => {
     if (!targetPath || !path.isAbsolute(targetPath)) return false;
-    await shell.showItemInFolder(targetPath);
+    const resolvedPath = path.resolve(targetPath);
+    if (!isSubpathOrSame(resolvedPath, app.getPath("home"))) return false;
+    shell.showItemInFolder(resolvedPath);
     return true;
   });
 
@@ -314,6 +319,11 @@ function registerSearchHotkey(accelerator: string): boolean {
     void showSearch();
   });
   return false;
+}
+
+function isSubpathOrSame(childPath: string, parentPath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function refreshSearchWatcher() {

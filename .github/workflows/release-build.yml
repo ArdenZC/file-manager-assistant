@@ -89,7 +89,9 @@ jobs:
 
             - Windows: NSIS installer and portable zip, x64 / ia32 / arm64
             - macOS: dmg and zip, x64 / arm64
+            - Branded Zen Canvas installer assets, app icon, and bilingual release/legal copy
             - Local-first SQLite FTS search, preview execution, and 15-day restore records
+            - Security posture: Electron sandbox, isolated preload IPC, guarded move/rename operations, and npm high audit clean
           files: |
             release-artifacts/**/*.exe
             release-artifacts/**/*.dmg

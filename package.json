@@ -1,9 +1,11 @@
 {
   "name": "zen-canvas",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A local-first personal digital asset steward.",
   "author": "Startlan",
+  "homepage": "https://github.com/ArdenZC/file-manager-assistant",
+  "copyright": "Copyright © 2026 Startlan",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -18,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.electron.json",
     "security:audit": "npm audit --audit-level=high",
     "verify": "npm run typecheck && npm test && npm run test:performance && npm run build && npm run security:audit",
+    "assets:brand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generateBrandAssets.ps1",
     "dist": "npm run build && npm run rebuild:electron && electron-builder --win nsis zip --mac dmg zip --publish never",
     "dist:win": "npm run build && npm run rebuild:electron && electron-builder --win nsis zip --x64 --ia32 --arm64 --publish never",
     "postdist:win": "npm run rebuild:native",
@@ -50,11 +53,13 @@
     "productName": "Zen Canvas",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
-      "output": "dist-packages"
+      "output": "dist-packages",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "asar": true,
@@ -64,6 +69,8 @@
     ],
     "npmRebuild": true,
     "win": {
+      "icon": "build/icon.ico",
+      "legalTrademarks": "Zen Canvas",
       "target": [
         {
           "target": "nsis",
@@ -87,9 +94,27 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/installerIcon.ico",
+      "uninstallerIcon": "build/uninstallerIcon.ico",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerHeaderIcon": "build/installerHeaderIcon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
+      "installerLanguages": [
+        "en_US",
+        "zh_CN"
+      ],
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": true,
+      "menuCategory": "Zen Canvas",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Zen Canvas",
+      "uninstallDisplayName": "Zen Canvas"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.productivity",
       "target": [
         {
@@ -105,6 +130,33 @@
             "x64",
             "arm64"
           ]
+        }
+      ]
+    },
+    "dmg": {
+      "title": "Zen Canvas ${version}",
+      "background": "build/dmg-background.png",
+      "icon": "build/icon.icns",
+      "license": {
+        "en": "build/license_en.txt",
+        "zh_CN": "build/license_zh_CN.txt"
+      },
+      "iconSize": 96,
+      "window": {
+        "width": 640,
+        "height": 420
+      },
+      "contents": [
+        {
+          "x": 206,
+          "y": 272,
+          "type": "file"
+        },
+        {
+          "x": 434,
+          "y": 272,
+          "type": "link",
+          "path": "/Applications"
         }
       ]
     }

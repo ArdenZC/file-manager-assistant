@@ -2,6 +2,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import {
   Archive,
   Check,
+  ChevronRight,
   Clock3,
   File,
   Folder,
@@ -314,6 +315,7 @@ export function App() {
               setIsCommandOpen(false);
               void fileManager?.hideSearch?.();
             }}
+            platform={platform}
             t={t}
             standalone
           />
@@ -508,6 +510,7 @@ export function App() {
           setView={setView}
           setSelectedFileId={setSelectedFileId}
           onClose={() => setIsCommandOpen(false)}
+          platform={platform}
           t={t}
         />
       )}
@@ -1417,6 +1420,7 @@ function CommandModal({
   setView,
   setSelectedFileId,
   onClose,
+  platform,
   t,
   standalone = false
 }: {
@@ -1425,6 +1429,7 @@ function CommandModal({
   setView: (view: View) => void;
   setSelectedFileId: (id: string) => void;
   onClose: () => void;
+  platform: NodeJS.Platform | "browser";
   t: Translator;
   standalone?: boolean;
 }) {
@@ -1433,16 +1438,26 @@ function CommandModal({
   const [activeIndex, setActiveIndex] = useState(0);
   const fileManager = window.fileManager;
   const hasNativeApi = typeof fileManager !== "undefined";
+  void setView;
+  void setSelectedFileId;
+  const trimmedSearch = search.trim();
   const fallbackResults: SearchResult[] = files
     .filter((file) => `${file.name} ${file.path} ${file.purpose}`.toLowerCase().includes(search.toLowerCase()))
     .slice(0, 8)
     .map((file) => ({ file, score: 10, matched_text: file.name }));
-  const results = hasNativeApi ? nativeResults : fallbackResults;
+  const results = trimmedSearch ? (hasNativeApi ? nativeResults : fallbackResults) : [];
+  const showResults = !standalone && results.length > 0;
+  const locateKey = platform === "darwin" ? "⌥↵" : "Alt↵";
 
   useEffect(() => {
     if (!fileManager) return;
+    if (!trimmedSearch) {
+      setNativeResults([]);
+      setActiveIndex(0);
+      return;
+    }
     const timer = window.setTimeout(() => {
-      fileManager.searchQuery({ query: search, limit: 12 })
+      fileManager.searchQuery({ query: trimmedSearch, limit: 12 })
         .then((next) => {
           setNativeResults(next);
           setActiveIndex(0);
@@ -1450,7 +1465,7 @@ function CommandModal({
         .catch(() => setNativeResults([]));
     }, 40);
     return () => window.clearTimeout(timer);
-  }, [fileManager, search]);
+  }, [fileManager, trimmedSearch]);
 
   async function openFile(file: FileRecord) {
     if (fileManager) {
@@ -1465,21 +1480,27 @@ function CommandModal({
     }
   }
 
-  function go(next: View) {
-    setView(next);
-    onClose();
+  function clearSearch() {
+    setSearch("");
+    setActiveIndex(0);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
-  function showDetails(file: FileRecord) {
-    setSelectedFileId(file.id);
-    go("library");
+  function getResultTone(file: FileRecord) {
+    if (file.risk_level === "Sensitive") return "red";
+    if (file.lifecycle === "Archive") return "purple";
+    return "blue";
   }
 
   return (
     <div className={`command-backdrop ${standalone ? "standalone" : ""}`} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div
-        className={`command-modal ${standalone ? "standalone-modal" : ""}`}
+        className={`command-modal ${standalone ? "standalone-modal" : ""} ${showResults ? "rounded-24" : "rounded-36"}`}
         onKeyDown={(event) => {
+          if ((event.metaKey && event.key === "Backspace") || (event.ctrlKey && event.key === "Backspace")) {
+            event.preventDefault();
+            clearSearch();
+          }
           if (event.key === "ArrowDown") {
             event.preventDefault();
             setActiveIndex((index) => Math.min(index + 1, results.length - 1));
@@ -1490,48 +1511,91 @@ function CommandModal({
           }
           if (event.key === "Enter" && results[activeIndex]) {
             event.preventDefault();
-            void openFile(results[activeIndex].file);
+            if (event.altKey) void revealFile(results[activeIndex].file);
+            else void openFile(results[activeIndex].file);
           }
           if (event.key === "Escape") onClose();
         }}
       >
-        <div className="command-input-row">
-          <Search size={20} />
+        <div className={`command-search-head ${showResults ? "has-results" : ""}`}>
+          <Search className="command-search-icon" size={20} strokeWidth={2.2} />
           <input
             ref={inputRef}
             value={search}
             placeholder={t("commandPlaceholder")}
             onChange={(event) => setSearch(event.target.value)}
+            onClick={() => inputRef.current?.focus()}
           />
-          <button onClick={onClose} aria-label={t("close")}>
-            <X size={16} />
-          </button>
+          {search && (
+            <button className="command-clear-button" onClick={clearSearch} aria-label={t("clearSearch")}>
+              <X size={16} strokeWidth={2.5} />
+            </button>
+          )}
+          <kbd className="command-esc-key">ESC</kbd>
         </div>
-        {!standalone && (
-          <div className="command-section">
-            <span>{t("bestMatches")}</span>
-            {results.map(({ file }, index) => (
-              <button
-                key={file.id}
-                className={index === activeIndex ? "active-result" : ""}
-                onClick={() => openFile(file)}
-              >
-                <File size={17} />
-                <div>
-                  <strong>{file.name}</strong>
-                  <small>{file.path}</small>
-                </div>
-                <em className="result-dimension">{file.purpose}</em>
-                <span className="result-actions">
-                  <b onClick={(event) => { event.stopPropagation(); void revealFile(file); }}>{t("reveal")}</b>
-                  <b onClick={(event) => { event.stopPropagation(); showDetails(file); }}>{t("details")}</b>
-                </span>
-              </button>
-            ))}
+        {showResults && (
+          <div className="command-results-panel">
+            <div className="command-results">
+              <div className="command-section-label">{t("smartMatches")}</div>
+              <div className="command-result-stack">
+                {results.map(({ file }, index) => {
+                  const tone = getResultTone(file);
+                  const extension = file.extension ? file.extension.replace(".", "").toUpperCase() : file.file_type;
+                  return (
+                    <button
+                      key={file.id}
+                      className={`result-item-card ${index === activeIndex ? "active-row" : ""}`}
+                      onClick={() => openFile(file)}
+                      onMouseEnter={() => setActiveIndex(index)}
+                    >
+                      <span className={`result-main-icon ${tone}`}>
+                        <File size={20} strokeWidth={1.5} />
+                      </span>
+                      <span className="result-copy">
+                        <strong><HighlightText text={file.name} highlight={trimmedSearch} /></strong>
+                        <small>
+                          <span>{file.directory || file.path}</span>
+                          <i />
+                          <em className={tone}>{file.purpose}</em>
+                        </small>
+                      </span>
+                      <span className="result-trailing">
+                        <em>{extension}</em>
+                        {index === activeIndex && <ChevronRight className="command-row-chevron" size={16} />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="command-action-bar">
+              <span>{t("matchesFound").replace("{count}", String(results.length))}</span>
+              <div>
+                <span><kbd>↵</kbd>{t("openResult")}</span>
+                <span><kbd>{locateKey}</kbd>{t("revealPhysical")}</span>
+                <span><kbd>⇥</kbd>{t("sortingAdvice")}</span>
+              </div>
+            </div>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function HighlightText({ text, highlight }: { text: string; highlight: string }) {
+  const value = highlight.trim();
+  if (!value) return <>{text}</>;
+  const escaped = value.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const matcher = new RegExp(`(${escaped})`, "ig");
+  return (
+    <>
+      {text.split(matcher).map((part, index) => (
+        part.toLowerCase() === value.toLowerCase()
+          ? <mark className="highlight-mark" key={`${part}-${index}`}>{part}</mark>
+          : <span key={`${part}-${index}`}>{part}</span>
+      ))}
+    </>
   );
 }
 
