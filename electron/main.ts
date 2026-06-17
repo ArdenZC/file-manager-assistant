@@ -85,6 +85,7 @@ async function createSearchWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     transparent: true,
+    hasShadow: false,
     icon: process.platform === "darwin" ? undefined : appIconPath,
     backgroundColor: "#00000000",
     webPreferences: {
