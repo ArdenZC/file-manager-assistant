@@ -45,6 +45,8 @@ const api = {
     ipcRenderer.invoke("search:setHotkey", accelerator),
   showSearch: (): Promise<boolean> => ipcRenderer.invoke("search:show"),
   hideSearch: (): Promise<boolean> => ipcRenderer.invoke("search:hide"),
+  setSearchExpanded: (expanded: boolean): Promise<boolean> =>
+    ipcRenderer.invoke("search:setExpanded", Boolean(expanded)),
   getBackgroundResident: (): Promise<boolean> => ipcRenderer.invoke("settings:getBackgroundResident"),
   setBackgroundResident: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke("settings:setBackgroundResident", enabled),

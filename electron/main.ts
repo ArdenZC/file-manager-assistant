@@ -19,6 +19,8 @@ let isQuitting = false;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev: boolean = Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.NODE_ENV === "development";
 const appIconPath = path.join(__dirname, "../../build/icon.png");
+const searchCompactSize = { width: 700, height: 110 };
+const searchExpandedSize = { width: 760, height: 520 };
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -67,6 +69,7 @@ async function createWindow() {
 
 async function createSearchWindow() {
   if (searchWindow && !searchWindow.isDestroyed()) {
+    setSearchWindowExpanded(false);
     searchWindow.show();
     searchWindow.focus();
     searchWindow.webContents.send("command:open");
@@ -74,8 +77,8 @@ async function createSearchWindow() {
   }
 
   searchWindow = new BrowserWindow({
-    width: 700,
-    height: 110,
+    width: searchCompactSize.width,
+    height: searchCompactSize.height,
     minWidth: 520,
     minHeight: 96,
     title: "Zen Canvas Search",
@@ -103,6 +106,7 @@ async function createSearchWindow() {
     searchWindow = null;
   });
   searchWindow.on("blur", () => {
+    setSearchWindowExpanded(false);
     searchWindow?.hide();
   });
 
@@ -204,8 +208,14 @@ function registerIpc() {
   });
 
   ipcMain.handle("search:hide", async () => {
+    setSearchWindowExpanded(false);
     searchWindow?.hide();
     mainWindow?.webContents.send("command:hide");
+    return true;
+  });
+
+  ipcMain.handle("search:setExpanded", async (_event, expanded: boolean) => {
+    setSearchWindowExpanded(Boolean(expanded));
     return true;
   });
 
@@ -302,6 +312,15 @@ async function showSearch() {
     return;
   }
   await createSearchWindow();
+}
+
+function setSearchWindowExpanded(expanded: boolean) {
+  if (!searchWindow || searchWindow.isDestroyed()) return;
+  const size = expanded ? searchExpandedSize : searchCompactSize;
+  const [currentWidth, currentHeight] = searchWindow.getSize();
+  if (currentWidth === size.width && currentHeight === size.height) return;
+  searchWindow.setSize(size.width, size.height);
+  searchWindow.center();
 }
 
 function registerSearchHotkey(accelerator: string): boolean {

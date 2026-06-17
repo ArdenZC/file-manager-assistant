@@ -144,6 +144,19 @@ export function App() {
   }, [effectiveTheme, theme]);
 
   useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === "zc-theme") {
+        setThemeState(preferredTheme());
+      }
+      if (!event.key || event.key === "zc-language" || event.key === "fma-language") {
+        setLanguageState(preferredLanguage());
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  useEffect(() => {
     if (!fileManager) return;
     fileManager.getSnapshot().then((next) => {
       if (next.files.length) {
@@ -168,7 +181,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = fileManager?.onCommandOpen?.(() => setIsCommandOpen(true));
+    const unsubscribe = fileManager?.onCommandOpen?.(() => {
+      setThemeState(preferredTheme());
+      setLanguageState(preferredLanguage());
+      setIsCommandOpen(true);
+    });
     return () => unsubscribe?.();
   }, [fileManager]);
 
@@ -184,7 +201,11 @@ export function App() {
   }, [isCommandOpen]);
 
   useEffect(() => {
-    if (isSearchMode) setIsCommandOpen(true);
+    if (isSearchMode) {
+      setThemeState(preferredTheme());
+      setLanguageState(preferredLanguage());
+      setIsCommandOpen(true);
+    }
   }, [isSearchMode]);
 
   useEffect(() => {
@@ -1454,7 +1475,7 @@ function CommandModal({
     .slice(0, 8)
     .map((file) => ({ file, score: 10, matched_text: file.name }));
   const results = trimmedSearch ? (hasNativeApi ? nativeResults : fallbackResults) : [];
-  const showResults = !standalone && results.length > 0;
+  const showResults = trimmedSearch.length > 0 && results.length > 0;
   const locateKey = platform === "darwin" ? "⌥↵" : "Alt↵";
 
   useEffect(() => {
@@ -1474,6 +1495,18 @@ function CommandModal({
     }, 40);
     return () => window.clearTimeout(timer);
   }, [fileManager, trimmedSearch]);
+
+  useEffect(() => {
+    if (!standalone || !fileManager?.setSearchExpanded) return;
+    void fileManager.setSearchExpanded(showResults);
+  }, [fileManager, showResults, standalone]);
+
+  useEffect(() => {
+    if (!standalone || !fileManager?.setSearchExpanded) return;
+    return () => {
+      void fileManager.setSearchExpanded(false);
+    };
+  }, [fileManager, standalone]);
 
   async function openFile(file: FileRecord) {
     if (fileManager) {
