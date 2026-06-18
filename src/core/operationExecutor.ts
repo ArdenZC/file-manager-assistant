@@ -29,25 +29,27 @@ export async function executeOperations(
     }
 
     try {
-      if (await pathExists(operation.target_path)) {
-        logs.push(makeLog(operation, batchId, "failed", "Target path already exists", createdAt));
+      const targetPath = await resolveAvailableTargetPath(operation.target_path);
+      if (!targetPath) {
+        logs.push(makeLog(operation, batchId, "failed", "No available non-conflicting target path", createdAt));
         continue;
       }
-      await fs.mkdir(path.dirname(operation.target_path), { recursive: true });
-      await fs.rename(operation.source_path, operation.target_path);
+      const actualOperation = withActualTarget(operation, targetPath);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.rename(operation.source_path, targetPath);
       const nextFile = {
         ...file,
-        path: operation.target_path,
-        directory: path.dirname(operation.target_path),
-        name: path.basename(operation.target_path),
+        path: targetPath,
+        directory: path.dirname(targetPath),
+        name: path.basename(targetPath),
         suggested_action: "Keep" as const,
         suggested_target_path: "",
-        suggested_name: path.basename(operation.target_path),
+        suggested_name: path.basename(targetPath),
         requires_confirmation: false,
         last_seen_at: createdAt
       };
       updatedFiles.push(nextFile);
-      logs.push(makeLog(operation, batchId, "success", null, createdAt));
+      logs.push(makeLog(actualOperation, batchId, "success", null, createdAt));
     } catch (error) {
       logs.push(makeLog(operation, batchId, "failed", readableError(error), createdAt));
     }
@@ -100,4 +102,26 @@ async function pathExists(targetPath: string): Promise<boolean> {
     if (code === "ENOENT") return false;
     throw error;
   }
+}
+
+async function resolveAvailableTargetPath(targetPath: string): Promise<string | null> {
+  const resolved = path.resolve(targetPath);
+  if (!(await pathExists(resolved))) return resolved;
+
+  const directory = path.dirname(resolved);
+  const extension = path.extname(resolved);
+  const stem = path.basename(resolved, extension);
+  for (let index = 1; index <= 999; index += 1) {
+    const candidate = path.join(directory, `${stem} (${index})${extension}`);
+    if (!(await pathExists(candidate))) return candidate;
+  }
+  return null;
+}
+
+function withActualTarget(operation: OperationPreview, targetPath: string): OperationPreview {
+  return {
+    ...operation,
+    target_path: targetPath,
+    new_name: path.basename(targetPath)
+  };
 }

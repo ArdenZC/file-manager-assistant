@@ -79,9 +79,10 @@ describe("operation execution safety", () => {
     expect(validateOperationPreview(file, operation)).toContain("Unsupported operation type");
   });
 
-  it("does not overwrite existing target files", async () => {
+  it("adds a non-destructive suffix when the target file already exists", async () => {
     const source = path.join(tempDir, "source.txt");
     const target = path.join(tempDir, "renamed.txt");
+    const suffixedTarget = path.join(tempDir, "renamed (1).txt");
     await fs.writeFile(source, "source");
     await fs.writeFile(target, "existing");
 
@@ -90,10 +91,13 @@ describe("operation execution safety", () => {
 
     const result = await executeOperations([file], [operation]);
 
-    expect(result.logs[0].status).toBe("failed");
-    expect(result.logs[0].error_message).toContain("Target path already exists");
-    await expect(fs.readFile(source, "utf8")).resolves.toBe("source");
+    expect(result.logs[0].status).toBe("success");
+    expect(result.logs[0].target_path).toBe(suffixedTarget);
+    expect(result.logs[0].new_name).toBe("renamed (1).txt");
+    expect(result.updatedFiles[0].path).toBe(suffixedTarget);
+    await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(target, "utf8")).resolves.toBe("existing");
+    await expect(fs.readFile(suffixedTarget, "utf8")).resolves.toBe("source");
   });
 
   it("rejects protected system target folders", () => {
