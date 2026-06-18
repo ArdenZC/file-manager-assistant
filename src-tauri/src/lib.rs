@@ -13,8 +13,9 @@ pub use db::{
     RuleExecutionSummary, StatsSummary,
 };
 pub use file_ops::{
-    execute_moves, move_file, rename_file, ExecuteMovesRequest, ExecuteMovesResult,
-    FileOperationResult, OperationLogDto, OperationPreviewRequest,
+    execute_moves, move_file, rename_file, restore_moves, ExecuteMovesRequest, ExecuteMovesResult,
+    FileOperationResult, OperationLogDto, OperationPreviewRequest, RestoreMovesRequest,
+    RestoreMovesResult,
 };
 pub use scanner::{
     scan_directory, ScanBatchPayload, ScanProgressPayload, ScanSummary, ScannedEntry,

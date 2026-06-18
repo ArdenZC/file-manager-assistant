@@ -259,6 +259,12 @@ export interface ExecuteOperationResult {
   batch_id: string;
 }
 
+export interface RestoreMovesResult {
+  logs: OperationLog[];
+  restored: number;
+  failed: number;
+}
+
 export interface SearchSource {
   id: string;
   label: string;

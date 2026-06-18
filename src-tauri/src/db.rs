@@ -634,11 +634,15 @@ pub fn get_stats_summary(db: State<'_, Database>) -> Result<StatsSummary, String
 }
 
 #[tauri::command]
-pub fn execute_rules_on_inbox(
+pub async fn execute_rules_on_inbox(
     db: State<'_, Database>,
     rules: Vec<Rule>,
 ) -> Result<RuleExecutionSummary, String> {
-    db.execute_rules_on_inbox(rules).map_err(command_error)
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || db.execute_rules_on_inbox(rules))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
 }
 
 fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {

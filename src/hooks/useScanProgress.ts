@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { type UnlistenFn } from "@tauri-apps/api/event";
 import {
   tauriApi,
@@ -31,6 +31,8 @@ const initialState: UseScanProgressState = {
   error: null
 };
 
+const MAX_RETAINED_ENTRIES = 5_000;
+
 export function useScanProgress(options: UseScanProgressOptions = {}) {
   const optionsRef = useRef(options);
   const [state, setState] = useState<UseScanProgressState>(initialState);
@@ -47,35 +49,44 @@ export function useScanProgress(options: UseScanProgressOptions = {}) {
       const [unlistenProgress, unlistenBatch, unlistenComplete, unlistenError] = await Promise.all([
         tauriApi.onScanProgress((progress) => {
           if (disposed) return;
-          setState((current) => ({
-            ...current,
-            status: "scanning",
-            progress,
-            error: null
-          }));
+          startTransition(() => {
+            setState((current) => ({
+              ...current,
+              status: "scanning",
+              progress,
+              error: null
+            }));
+          });
         }),
         tauriApi.onScanBatch((batch) => {
           if (disposed) return;
           optionsRef.current.onBatch?.(batch);
-          setState((current) => ({
-            ...current,
-            status: "scanning",
-            progress: batch.progress,
-            entries: optionsRef.current.keepEntries
-              ? current.entries.concat(batch.entries)
-              : current.entries,
-            error: null
-          }));
+          startTransition(() => {
+            setState((current) => {
+              const entries = optionsRef.current.keepEntries
+                ? current.entries.concat(batch.entries).slice(-MAX_RETAINED_ENTRIES)
+                : current.entries;
+              return {
+                ...current,
+                status: "scanning",
+                progress: batch.progress,
+                entries,
+                error: null
+              };
+            });
+          });
         }),
         tauriApi.onScanComplete((summary) => {
           if (disposed) return;
           optionsRef.current.onComplete?.(summary);
-          setState((current) => ({
-            ...current,
-            status: "completed",
-            progress: summary,
-            error: null
-          }));
+          startTransition(() => {
+            setState((current) => ({
+              ...current,
+              status: "completed",
+              progress: summary,
+              error: null
+            }));
+          });
         }),
         tauriApi.onScanError((payload) => {
           if (disposed) return;

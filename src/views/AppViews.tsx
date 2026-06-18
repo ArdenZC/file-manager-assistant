@@ -11,12 +11,13 @@ import type {
   FileQueryResult,
   FileRecord,
   FolderNamingLanguage,
+  OperationLog,
   OperationPreview,
   RestoreRetentionDays,
   Rule
 } from "../types/domain";
 import type { ThemeMode, Translator, View } from "../types/ui";
-import { formatBytes, formatDate, percent } from "../utils/format";
+import { formatBytes, percent } from "../utils/format";
 import {
   compactPath,
   defaultPlatformAccelerator,
@@ -948,15 +949,90 @@ const RuleRow = memo(function RuleRow({ rule }: { rule: Rule }) {
   );
 });
 
-export function RestoreView({ t }: { t: Translator }) {
+export function RestoreView({
+  logs,
+  onRestore,
+  t
+}: {
+  logs: OperationLog[];
+  onRestore: (logs: OperationLog[]) => Promise<void>;
+  t: Translator;
+}) {
+  const [selectedBatchId, setSelectedBatchId] = useState("");
+  const [isRestoring, setIsRestoring] = useState(false);
+  const batches = useMemo(() => groupOperationLogs(logs), [logs]);
+  const selectedBatch = batches.find((batch) => batch.batchId === selectedBatchId) ?? batches[0];
+  const restorableLogs = selectedBatch?.logs.filter(isRestorableLog) ?? [];
+  const historyLogs = useMemo(
+    () => [...logs].sort((a, b) => logTimeValue(b.created_at) - logTimeValue(a.created_at)).slice(0, 8),
+    [logs]
+  );
+
+  useEffect(() => {
+    if (!batches.length) {
+      setSelectedBatchId("");
+      return;
+    }
+    if (!selectedBatchId || !batches.some((batch) => batch.batchId === selectedBatchId)) {
+      setSelectedBatchId(batches[0].batchId);
+    }
+  }, [batches, selectedBatchId]);
+
+  async function restoreSelectedBatch() {
+    if (!restorableLogs.length || isRestoring) return;
+    setIsRestoring(true);
+    try {
+      await onRestore(restorableLogs);
+    } finally {
+      setIsRestoring(false);
+    }
+  }
+
   return (
     <div className="restore-layout page-enter">
       <section className="glass-panel restore-batches">
         <SectionTitle title={t("restoreRecords")} body={t("restoreDesc")} />
-        <div className="empty-state">{t("noRestoreRecords")}</div>
+        {batches.length ? (
+          <div className="restore-preview-list">
+            {batches.map((batch) => (
+              <button
+                className={`restore-preview-card restore-batch-card ${batch.batchId === selectedBatch?.batchId ? "ok" : ""}`}
+                key={batch.batchId}
+                onClick={() => setSelectedBatchId(batch.batchId)}
+              >
+                <div className="restore-preview-status">
+                  <RotateCcw size={16} />
+                  <strong>{formatLogDate(batch.createdAt)}</strong>
+                </div>
+                <div className="restore-preview-body">
+                  <strong>{batch.total} {t("items")} / {batch.restorable} {t("restorable")}</strong>
+                  <small>
+                    {t("success")}: {batch.success} · {t("failed")}: {batch.failed} · {t("restored")}: {batch.restored}
+                  </small>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">{t("noRestoreRecords")}</div>
+        )}
         <div className="restore-log-divider" />
         <SectionTitle title={t("operationHistory")} body={t("timeMachineDesc")} />
-        <div className="empty-state compact">{t("noOperationHistory")}</div>
+        {historyLogs.length ? (
+          <div className="restore-operation-log">
+            {historyLogs.map((log) => (
+              <div className="operation-row restore-item" key={log.id}>
+                <span className={`status-dot ${log.status === "success" ? "ok" : ""}`} />
+                <div>
+                  <strong>{log.new_name || log.old_name}</strong>
+                  <span>{log.operation_type} · {formatLogDate(log.created_at)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">{t("noOperationHistory")}</div>
+        )}
       </section>
 
       <section className="glass-panel restore-preview">
@@ -965,15 +1041,117 @@ export function RestoreView({ t }: { t: Translator }) {
             <h2>{t("restorePreview")}</h2>
             <p>{t("restorePreviewDesc")}</p>
           </div>
-          <button className="glass-button primary" disabled>
+          <button
+            className="glass-button primary"
+            disabled={!restorableLogs.length || isRestoring}
+            onClick={restoreSelectedBatch}
+          >
             <RotateCcw size={16} />
-            {t("restoreBatch")}
+            {isRestoring ? t("restoring") : t("restoreBatch")}
           </button>
         </div>
-        <div className="empty-state compact">{t("noRestorePreview")}</div>
+        {selectedBatch ? (
+          <div className="restore-preview-list">
+            {selectedBatch.logs.map((log) => {
+              const isRestorable = isRestorableLog(log);
+              return (
+                <div className={`restore-preview-card ${isRestorable ? "ok" : "blocked"}`} key={log.id}>
+                  <div className="restore-preview-status">
+                    {isRestorable ? <Check size={15} /> : <X size={15} />}
+                    <strong>{restoreStatusLabel(log, t)}</strong>
+                  </div>
+                  <div className="restore-preview-body">
+                    <strong>{log.new_name || log.old_name}</strong>
+                    <div className="restore-path-pair">
+                      <span title={log.path_after}>{compactPath(log.path_after, 48)}</span>
+                      <ChevronRight size={14} />
+                      <span title={log.path_before}>{compactPath(log.path_before, 48)}</span>
+                    </div>
+                    {(log.restore_error || log.error_message) && (
+                      <small>{log.restore_error || log.error_message}</small>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-state compact">{t("noRestorePreview")}</div>
+        )}
       </section>
     </div>
   );
+}
+
+interface OperationLogBatch {
+  batchId: string;
+  createdAt: string;
+  logs: OperationLog[];
+  total: number;
+  success: number;
+  failed: number;
+  restored: number;
+  restorable: number;
+}
+
+function groupOperationLogs(logs: OperationLog[]): OperationLogBatch[] {
+  const groups = new Map<string, OperationLog[]>();
+  for (const log of logs) {
+    const key = log.batch_id || "batch";
+    const group = groups.get(key) ?? [];
+    group.push(log);
+    groups.set(key, group);
+  }
+
+  return [...groups.entries()]
+    .map(([batchId, batchLogs]) => {
+      const sortedLogs = [...batchLogs].sort((a, b) => logTimeValue(b.created_at) - logTimeValue(a.created_at));
+      return {
+        batchId,
+        createdAt: sortedLogs[0]?.created_at ?? "",
+        logs: sortedLogs,
+        total: sortedLogs.length,
+        success: sortedLogs.filter((log) => log.status === "success").length,
+        failed: sortedLogs.filter((log) => log.status === "failed").length,
+        restored: sortedLogs.filter((log) => log.restore_status === "restored").length,
+        restorable: sortedLogs.filter(isRestorableLog).length
+      };
+    })
+    .sort((a, b) => logTimeValue(b.createdAt) - logTimeValue(a.createdAt));
+}
+
+function isRestorableLog(log: OperationLog): boolean {
+  return (
+    log.status === "success" &&
+    log.can_restore &&
+    (log.restore_status === "not_restored" || log.restore_status === "failed")
+  );
+}
+
+function restoreStatusLabel(log: OperationLog, t: Translator): string {
+  if (log.restore_status === "restored") return t("restored");
+  if (log.restore_status === "failed") return t("failed");
+  if (isRestorableLog(log)) return t("restorable");
+  if (log.status === "skipped") return t("skipped");
+  return t("unavailable");
+}
+
+function formatLogDate(value: string): string {
+  const timestamp = logTimeValue(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "-";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(timestamp));
+}
+
+function logTimeValue(value: string): number {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function SettingsView({

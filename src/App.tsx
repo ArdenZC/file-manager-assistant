@@ -26,6 +26,7 @@ import type {
   DashboardStats,
   FileQueryResult,
   FileRecord,
+  OperationLog,
   OperationPreview,
   Rule
 } from "./types/domain";
@@ -89,6 +90,7 @@ export function App() {
   const [selectedFileId, setSelectedFileId] = useState("");
   const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
+  const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
   const [selectedOperationIds, setSelectedOperationIds] = useState<Set<string>>(new Set());
   const [previewNameOverrides, setPreviewNameOverrides] = useState<Record<string, string>>({});
   const [isScanning, setIsScanning] = useState(false);
@@ -101,6 +103,7 @@ export function App() {
   });
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
+  const lastScanStatsRefreshRef = useRef(0);
   const platform = detectBrowserPlatform();
   const isWindows = platform === "win32";
   const isSearchMode = new URLSearchParams(window.location.search).get("mode") === "search";
@@ -127,11 +130,17 @@ export function App() {
     }
   }, [searchQuery]);
 
+  const refreshStatsDuringScan = useCallback(() => {
+    const now = Date.now();
+    if (now - lastScanStatsRefreshRef.current < 1000) return;
+    lastScanStatsRefreshRef.current = now;
+    void loadStats();
+  }, [loadStats]);
+
   const scanState = useScanProgress({
-    onBatch: () => {
-      void loadStats();
-    },
+    onBatch: refreshStatsDuringScan,
     onComplete: () => {
+      lastScanStatsRefreshRef.current = 0;
       void Promise.all([loadStats(), loadFirstPage()]);
     }
   });
@@ -292,10 +301,24 @@ export function App() {
     );
     if (!operations.length) return;
     try {
-      await tauriApi.executeMoves(operations as OperationPreview[]);
+      const result = await tauriApi.executeMoves(operations as OperationPreview[]);
+      setOperationLogs((current) => [...result.logs, ...current]);
       setSelectedOperationIds(new Set());
       await Promise.all([loadStats(), loadFirstPage()]);
       setStatus(t("success"));
+    } catch (error) {
+      setStatus(readableError(error));
+    }
+  }
+
+  async function restoreOperationLogs(logs: OperationLog[]) {
+    if (!logs.length) return;
+    try {
+      const result = await tauriApi.restoreMoves(logs);
+      const updatedById = new Map(result.logs.map((log) => [log.id, log]));
+      setOperationLogs((current) => current.map((log) => updatedById.get(log.id) ?? log));
+      await Promise.all([loadStats(), loadFirstPage()]);
+      setStatus(`${t("restored")}: ${result.restored.toLocaleString()}`);
     } catch (error) {
       setStatus(readableError(error));
     }
@@ -501,7 +524,9 @@ export function App() {
               />
             )}
             {view === "rules" && <RulesView rules={rules} onSave={saveRule} t={t} />}
-            {view === "restore" && <RestoreView t={t} />}
+            {view === "restore" && (
+              <RestoreView logs={operationLogs} onRestore={restoreOperationLogs} t={t} />
+            )}
             {view === "settings" && (
               <SettingsView
                 language={language}

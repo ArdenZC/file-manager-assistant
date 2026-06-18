@@ -61,7 +61,7 @@ pub struct OperationPreviewRequest {
     pub is_executable: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OperationLogDto {
     pub id: String,
     pub batch_id: String,
@@ -90,6 +90,18 @@ pub struct ExecuteMovesResult {
     #[serde(rename = "updatedFiles")]
     pub updated_files: Vec<serde_json::Value>,
     pub batch_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RestoreMovesRequest {
+    pub logs: Vec<OperationLogDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RestoreMovesResult {
+    pub logs: Vec<OperationLogDto>,
+    pub restored: usize,
+    pub failed: usize,
 }
 
 #[command]
@@ -197,6 +209,31 @@ fn execute_preview_operation(
     }
 }
 
+#[command]
+pub fn restore_moves(request: RestoreMovesRequest) -> Result<RestoreMovesResult, String> {
+    let mut restored = 0_usize;
+    let mut failed = 0_usize;
+    let logs = request
+        .logs
+        .iter()
+        .map(|log| {
+            let result = restore_operation_log(log);
+            if result.restore_status == "restored" {
+                restored += 1;
+            } else if result.restore_status == "failed" {
+                failed += 1;
+            }
+            result
+        })
+        .collect::<Vec<_>>();
+
+    Ok(RestoreMovesResult {
+        logs,
+        restored,
+        failed,
+    })
+}
+
 fn make_operation_log(
     batch_id: &str,
     created_at: &str,
@@ -228,6 +265,61 @@ fn make_operation_log(
         restore_status: "not_restored".to_string(),
         restore_error: None,
     }
+}
+
+fn restore_operation_log(log: &OperationLogDto) -> OperationLogDto {
+    if log.status != "success" {
+        return mark_restore_unavailable(log, "Only successful operations can be restored.");
+    }
+    if !log.can_restore || log.restore_status == "restored" {
+        return mark_restore_unavailable(log, "This operation is no longer restorable.");
+    }
+    if log.path_before.trim().is_empty() || log.path_after.trim().is_empty() {
+        return mark_restore_failed(log, "Restore metadata is incomplete.");
+    }
+
+    let source = match validate_source_path(&PathBuf::from(&log.path_after)) {
+        Ok(path) => path,
+        Err(error) => return mark_restore_failed(log, error),
+    };
+    let target = match validate_target_path(&PathBuf::from(&log.path_before)) {
+        Ok(path) => path,
+        Err(error) => return mark_restore_failed(log, error),
+    };
+
+    if let Err(error) = ensure_not_protected(&source) {
+        return mark_restore_failed(log, error);
+    }
+    if let Err(error) = ensure_not_protected(&target) {
+        return mark_restore_failed(log, error);
+    }
+    if let Err(error) = move_file_no_overwrite(&source, &target) {
+        return mark_restore_failed(log, error);
+    }
+
+    let mut restored = log.clone();
+    restored.can_undo = false;
+    restored.can_restore = false;
+    restored.restored_at = Some(current_timestamp_ms().to_string());
+    restored.restore_status = "restored".to_string();
+    restored.restore_error = None;
+    restored
+}
+
+fn mark_restore_failed(log: &OperationLogDto, error: impl Into<String>) -> OperationLogDto {
+    let mut failed = log.clone();
+    failed.restore_status = "failed".to_string();
+    failed.restore_error = Some(error.into());
+    failed
+}
+
+fn mark_restore_unavailable(log: &OperationLogDto, reason: impl Into<String>) -> OperationLogDto {
+    let mut unavailable = log.clone();
+    unavailable.can_undo = false;
+    unavailable.can_restore = false;
+    unavailable.restore_status = "unavailable".to_string();
+    unavailable.restore_error = Some(reason.into());
+    unavailable
 }
 
 fn validate_source_path(path: &Path) -> Result<PathBuf, String> {
@@ -489,6 +581,131 @@ mod tests {
         assert_eq!(result.logs[0].status, "success");
         assert_eq!(result.logs[0].operation_type, "move");
         assert_eq!(result.updated_files.len(), 0);
+    }
+
+    #[test]
+    fn restore_moves_restores_successful_move_log() {
+        let root = test_dir();
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&target_dir).expect("target dir");
+
+        let source = source_dir.join("sample.txt");
+        let target = target_dir.join("sample.txt");
+        fs::write(&source, "hello").expect("write source");
+
+        let executed = execute_moves(ExecuteMovesRequest {
+            operations: vec![OperationPreviewRequest {
+                id: "op-1".to_string(),
+                file_id: "file-1".to_string(),
+                operation_type: "move".to_string(),
+                source_path: source.to_string_lossy().into_owned(),
+                target_path: target.to_string_lossy().into_owned(),
+                old_name: "sample.txt".to_string(),
+                new_name: "sample.txt".to_string(),
+                is_executable: Some(true),
+            }],
+        })
+        .expect("execute moves");
+
+        let restored = restore_moves(RestoreMovesRequest {
+            logs: executed.logs.clone(),
+        })
+        .expect("restore moves");
+
+        assert!(source.exists());
+        assert!(!target.exists());
+        assert_eq!(restored.restored, 1);
+        assert_eq!(restored.failed, 0);
+        assert_eq!(restored.logs.len(), 1);
+        assert_eq!(restored.logs[0].restore_status, "restored");
+        assert!(!restored.logs[0].can_restore);
+        assert!(restored.logs[0].restored_at.is_some());
+    }
+
+    #[test]
+    fn restore_moves_refuses_to_overwrite_original_path() {
+        let root = test_dir();
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&target_dir).expect("target dir");
+
+        let source = source_dir.join("sample.txt");
+        let target = target_dir.join("sample.txt");
+        fs::write(&source, "hello").expect("write source");
+
+        let executed = execute_moves(ExecuteMovesRequest {
+            operations: vec![OperationPreviewRequest {
+                id: "op-1".to_string(),
+                file_id: "file-1".to_string(),
+                operation_type: "move".to_string(),
+                source_path: source.to_string_lossy().into_owned(),
+                target_path: target.to_string_lossy().into_owned(),
+                old_name: "sample.txt".to_string(),
+                new_name: "sample.txt".to_string(),
+                is_executable: Some(true),
+            }],
+        })
+        .expect("execute moves");
+
+        fs::write(&source, "new file").expect("write conflicting source");
+        let restored = restore_moves(RestoreMovesRequest {
+            logs: executed.logs.clone(),
+        })
+        .expect("restore moves");
+
+        assert_eq!(
+            fs::read_to_string(&source).expect("read conflict"),
+            "new file"
+        );
+        assert!(target.exists());
+        assert_eq!(restored.restored, 0);
+        assert_eq!(restored.failed, 1);
+        assert_eq!(restored.logs[0].restore_status, "failed");
+        assert!(restored.logs[0]
+            .restore_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Target file already exists"));
+    }
+
+    #[test]
+    fn restore_moves_restores_successful_rename_log() {
+        let root = test_dir();
+        fs::create_dir_all(&root).expect("root dir");
+
+        let source = root.join("old-name.txt");
+        let renamed = root.join("new-name.txt");
+        fs::write(&source, "hello").expect("write source");
+
+        let executed = execute_moves(ExecuteMovesRequest {
+            operations: vec![OperationPreviewRequest {
+                id: "op-1".to_string(),
+                file_id: "file-1".to_string(),
+                operation_type: "rename".to_string(),
+                source_path: source.to_string_lossy().into_owned(),
+                target_path: renamed.to_string_lossy().into_owned(),
+                old_name: "old-name.txt".to_string(),
+                new_name: "new-name.txt".to_string(),
+                is_executable: Some(true),
+            }],
+        })
+        .expect("execute rename");
+
+        assert!(!source.exists());
+        assert!(renamed.exists());
+
+        let restored = restore_moves(RestoreMovesRequest {
+            logs: executed.logs.clone(),
+        })
+        .expect("restore rename");
+
+        assert!(source.exists());
+        assert!(!renamed.exists());
+        assert_eq!(restored.restored, 1);
+        assert_eq!(restored.logs[0].restore_status, "restored");
     }
 
     fn test_dir() -> PathBuf {

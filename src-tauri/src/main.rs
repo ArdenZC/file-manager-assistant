@@ -21,7 +21,8 @@ fn main() {
             zen_canvas_tauri::scanner::scan_directory,
             zen_canvas_tauri::file_ops::move_file,
             zen_canvas_tauri::file_ops::rename_file,
-            zen_canvas_tauri::file_ops::execute_moves
+            zen_canvas_tauri::file_ops::execute_moves,
+            zen_canvas_tauri::file_ops::restore_moves
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Zen Canvas");

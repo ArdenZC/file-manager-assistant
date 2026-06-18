@@ -6,7 +6,9 @@ import type {
   ExecuteOperationResult,
   FileQueryResult,
   FileRecord,
+  OperationLog,
   OperationPreview,
+  RestoreMovesResult,
   Rule
 } from "../types/domain";
 
@@ -92,6 +94,10 @@ export const tauriApi = {
   executeMoves(operations: OperationPreview[]): Promise<ExecuteOperationResult> {
     const request: ExecuteOperationRequest = { operations };
     return invokeCommand<ExecuteOperationResult>("execute_moves", { request });
+  },
+
+  restoreMoves(logs: OperationLog[]): Promise<RestoreMovesResult> {
+    return invokeCommand<RestoreMovesResult>("restore_moves", { request: { logs } });
   },
 
   executeRulesOnInbox(rules: Rule[]): Promise<RuleExecutionSummary> {
