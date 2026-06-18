@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   Check,
@@ -32,6 +32,7 @@ import type {
   CloseBehavior,
   DefaultScanFolder,
   FileQuery,
+  FileQueryResult,
   FileRecord,
   FolderNamingLanguage,
   FolderScanResult,
@@ -41,6 +42,7 @@ import type {
   RestorePreview,
   RestoreRetentionDays,
   Rule,
+  ScanProgress,
   SearchResult,
   SearchSource
 } from "./types/domain";
@@ -97,6 +99,12 @@ const demoSnapshot: AppSnapshot = {
     stale_sources: 0
   }
 };
+const demoFilePage: FileQueryResult = {
+  files: demoFiles.slice(0, 50),
+  total: demoFiles.length,
+  limit: 50,
+  offset: 0
+};
 
 export function App() {
   const [language, setLanguageState] = useState<Language>(() => preferredLanguage());
@@ -105,6 +113,8 @@ export function App() {
   const t = useMemo(() => makeTranslator(language), [language]);
   const [view, setView] = useState<View>("scanner");
   const [snapshot, setSnapshot] = useState<AppSnapshot>(demoSnapshot);
+  const [libraryPage, setLibraryPage] = useState<FileQueryResult>(demoFilePage);
+  const [scopeFiles, setScopeFiles] = useState<FileRecord[]>(demoFiles);
   const [query, setQuery] = useState<FileQuery>({
     fileType: "All",
     purpose: "All",
@@ -118,12 +128,16 @@ export function App() {
   const [status, setStatus] = useState("");
   const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
   const [activeScanRootPaths, setActiveScanRootPaths] = useState<string[]>([]);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>("ask");
   const [previewNameOverrides, setPreviewNameOverrides] = useState<Record<string, string>>({});
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const closeBehaviorRef = useRef<CloseBehavior>("ask");
+  const libraryRequestIdRef = useRef(0);
+  const scopeRequestIdRef = useRef(0);
   const fileManager = window.fileManager;
   const platform = fileManager?.platform ?? detectBrowserPlatform();
   const isWindows = platform === "win32";
@@ -131,6 +145,53 @@ export function App() {
   const hasNativeApi = typeof fileManager !== "undefined";
   const isSearchMode = new URLSearchParams(window.location.search).get("mode") === "search";
   const effectiveTheme: Exclude<ThemeMode, "system"> = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+  const libraryLimit = 50;
+
+  const loadLibraryPage = useCallback(async (nextQuery: FileQuery, append = false, offset = 0) => {
+    const requestId = ++libraryRequestIdRef.current;
+    if (!fileManager) {
+      const files = filterFiles(demoFiles, nextQuery);
+      const nextFiles = files.slice(offset, offset + libraryLimit);
+      setLibraryPage((current) => ({
+        files: append ? [...current.files, ...nextFiles] : files.slice(0, libraryLimit),
+        total: files.length,
+        limit: libraryLimit,
+        offset
+      }));
+      return;
+    }
+    setIsLibraryLoading(true);
+    try {
+      const page = await fileManager.queryFiles({ ...nextQuery, limit: libraryLimit, offset });
+      if (requestId !== libraryRequestIdRef.current) return;
+      setLibraryPage((current) => append
+        ? { ...page, files: [...current.files, ...page.files], offset: 0 }
+        : page
+      );
+      const firstFile = page.files[0];
+      if (!append && firstFile) setSelectedFileId(firstFile.id);
+    } finally {
+      if (requestId === libraryRequestIdRef.current) setIsLibraryLoading(false);
+    }
+  }, [fileManager, libraryLimit]);
+
+  const loadScopedFiles = useCallback(async (roots: string[]) => {
+    const requestId = ++scopeRequestIdRef.current;
+    if (!fileManager) {
+      const files = roots.length ? demoFiles.filter((file) => fileBelongsToRoots(file, roots)) : demoFiles;
+      setScopeFiles(files);
+      return;
+    }
+    const page = await fileManager.queryFiles({
+      roots,
+      limit: 5000,
+      offset: 0,
+      sortBy: "modified_at",
+      sortDirection: "desc"
+    });
+    if (requestId !== scopeRequestIdRef.current) return;
+    setScopeFiles(page.files);
+  }, [fileManager]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("search-window-root", isSearchMode);
@@ -172,9 +233,22 @@ export function App() {
     if (!fileManager) return;
     fileManager.getSnapshot().then((next) => {
       setSnapshot(next);
-      setActiveScanRootPaths(next.scanRoots.map((root) => root.path));
+      const roots = next.scanRoots.map((root) => root.path);
+      setActiveScanRootPaths(roots);
+      void loadScopedFiles(roots);
       if (next.files.length) setSelectedFileId(next.files[0]?.id ?? "");
     });
+  }, [fileManager, loadScopedFiles]);
+
+  useEffect(() => {
+    void loadLibraryPage(query, false, 0);
+  }, [loadLibraryPage, query]);
+
+  useEffect(() => {
+    const unsubscribe = fileManager?.onScanProgress?.((progress) => {
+      setScanProgress(progress);
+    });
+    return () => unsubscribe?.();
   }, [fileManager]);
 
   useEffect(() => {
@@ -240,13 +314,15 @@ export function App() {
     }
   }, [isSearchMode]);
 
-  const scopedFiles = useMemo(
-    () => activeScanRootPaths.length ? snapshot.files.filter((file) => fileBelongsToRoots(file, activeScanRootPaths)) : snapshot.files,
-    [activeScanRootPaths, snapshot.files]
-  );
-  const filteredFiles = useMemo(() => filterFiles(snapshot.files, query), [snapshot.files, query]);
+  const scopedFiles = scopeFiles;
+  const filteredFiles = libraryPage.files;
   const selectedFile =
-    snapshot.files.find((file) => file.id === selectedFileId) ?? filteredFiles[0] ?? snapshot.files[0];
+    filteredFiles.find((file) => file.id === selectedFileId) ??
+    scopedFiles.find((file) => file.id === selectedFileId) ??
+    snapshot.files.find((file) => file.id === selectedFileId) ??
+    filteredFiles[0] ??
+    scopedFiles[0] ??
+    snapshot.files[0];
   const previews = useMemo(() => createOperationPreviews(scopedFiles), [scopedFiles]);
   const displayPreviews = useMemo(
     () => previews.map((preview) => applyPreviewNameOverride(preview, previewNameOverrides[preview.id])),
@@ -291,21 +367,38 @@ export function App() {
     if (!fileManager) return;
     const next = await fileManager.getSnapshot();
     setSnapshot(next);
-    setSelectedFileId(next.files[0]?.id ?? "");
+    const roots = activeScanRootPaths.length ? activeScanRootPaths : next.scanRoots.map((root) => root.path);
+    await Promise.all([
+      loadScopedFiles(roots),
+      loadLibraryPage(query, false, 0)
+    ]);
+    setSelectedFileId((current) => current || next.files[0]?.id || "");
   }
 
   async function handleScan() {
     setIsScanning(true);
+    setScanProgress(null);
     try {
       if (fileManager) {
         const result = await fileManager.scanDefaults();
+        if (result.canceled) {
+          setStatus(t("scanCanceled"));
+          return;
+        }
+        const roots = result.roots.map((root) => root.path);
         setActiveScanRootPaths(result.roots.map((root) => root.path));
         setSelectedFolders(result.roots.map((root) => root.path));
-        await refreshSnapshot();
-        setStatus(t("success"));
+        const next = await fileManager.getSnapshot();
+        setSnapshot(next);
+        await Promise.all([
+          loadLibraryPage(query, false, 0),
+          loadScopedFiles(roots)
+        ]);
+        setStatus(`${t("success")}: ${result.files.length}`);
       } else {
         await delay(1200);
         setSnapshot(demoSnapshot);
+        setScopeFiles(demoFiles);
         setStatus("");
       }
     } catch (error) {
@@ -317,24 +410,30 @@ export function App() {
 
   async function handleChooseFolders() {
     setIsScanning(true);
+    setScanProgress(null);
     try {
       if (fileManager) {
         const result: FolderScanResult = await fileManager.chooseAndScanFolders();
         if (result.canceled) {
-          setStatus(t("noFolderSelected"));
+          setStatus(result.selectedPaths.length ? t("scanCanceled") : t("noFolderSelected"));
           return;
         }
         setSelectedFolders(result.selectedPaths);
-        setActiveScanRootPaths(result.roots.map((root) => root.path));
+        const roots = result.roots.map((root) => root.path);
+        setActiveScanRootPaths(roots);
         const next = await fileManager.getSnapshot();
         setSnapshot(next);
-        setSelectedFileId(next.files[0]?.id ?? "");
-        setStatus(`${t("success")}: ${result.selectedPaths.length} / ${next.files.length}`);
+        await Promise.all([
+          loadScopedFiles(roots),
+          loadLibraryPage(query, false, 0)
+        ]);
+        setStatus(`${t("success")}: ${result.selectedPaths.length} / ${result.files.length}`);
       } else {
         await delay(900);
         const sampleFolders = ["C:/Users/example/Downloads", "C:/Users/example/Desktop"];
         setSelectedFolders(sampleFolders);
         setSnapshot(demoSnapshot);
+        setScopeFiles(demoFiles);
         setStatus(t("folderChooserUnavailable"));
       }
     } catch (error) {
@@ -349,6 +448,10 @@ export function App() {
       await fileManager.saveRule(rule);
       const next = await fileManager.reapplyRules();
       setSnapshot(next);
+      await Promise.all([
+        loadScopedFiles(activeScanRootPaths),
+        loadLibraryPage(query, false, 0)
+      ]);
     } else {
       setSnapshot((current) => ({ ...current, rules: [...current.rules, rule] }));
     }
@@ -360,8 +463,15 @@ export function App() {
     if (fileManager) {
       await fileManager.executeOperations({ operations });
       await refreshSnapshot();
+    } else {
+      await loadLibraryPage(query, false, 0);
     }
     setSelectedOperationIds(new Set());
+  }
+
+  async function cancelScan() {
+    await fileManager?.cancelScan?.();
+    setStatus(t("scanCanceling"));
   }
 
   function handleWindowAction(action: "minimize" | "maximize" | "close") {
@@ -547,10 +657,14 @@ export function App() {
             {view === "scanner" && (
               <ScannerView
                 snapshot={snapshot}
+                files={scopedFiles}
+                activeRootPaths={activeScanRootPaths}
                 selectedFolders={selectedFolders}
                 isScanning={isScanning}
+                scanProgress={scanProgress}
                 chooseFolders={handleChooseFolders}
                 scanCommon={handleScan}
+                cancelScan={cancelScan}
                 t={t}
               />
             )}
@@ -563,11 +677,13 @@ export function App() {
             )}
             {view === "library" && (
               <VaultView
-                files={filteredFiles}
+                page={libraryPage}
                 selectedFile={selectedFile}
                 query={query}
                 setQuery={setQuery}
                 setSelectedFileId={setSelectedFileId}
+                isLoading={isLibraryLoading}
+                onLoadMore={() => loadLibraryPage(query, true, libraryPage.files.length)}
                 t={t}
               />
             )}
@@ -720,32 +836,49 @@ function CloseChoiceDialog({
 
 function ScannerView({
   snapshot,
+  files,
+  activeRootPaths,
   selectedFolders,
   isScanning,
+  scanProgress,
   chooseFolders,
   scanCommon,
+  cancelScan,
   t
 }: {
   snapshot: AppSnapshot;
+  files: FileRecord[];
+  activeRootPaths: string[];
   selectedFolders: string[];
   isScanning: boolean;
+  scanProgress: ScanProgress | null;
   chooseFolders: () => Promise<void>;
   scanCommon: () => Promise<void>;
+  cancelScan: () => Promise<void>;
   t: Translator;
 }) {
-  const clutterItems = snapshot.stats.needsConfirmation + snapshot.stats.duplicateFiles + snapshot.stats.largeFiles;
-  const clutterRatio = snapshot.stats.totalFiles ? Math.min(1, clutterItems / snapshot.stats.totalFiles) : 0;
-  const diskUsageRatio = snapshot.stats.diskUsageRatio ?? 0;
+  const activeRoots = activeRootPaths.length
+    ? snapshot.scanRoots.filter((root) => activeRootPaths.some((rootPath) => samePathLike(root.path, rootPath)))
+    : snapshot.scanRoots;
+  const scopedTotalSize = files.reduce((sum, file) => sum + file.size, 0);
+  const scopedDiskTotal = sumUniqueDiskTotal(activeRoots) || snapshot.stats.diskTotalSize;
+  const clutterItems = files.filter((file) =>
+    file.requires_confirmation ||
+    file.is_duplicate ||
+    file.size > 1024 * 1024 * 1024
+  ).length;
+  const clutterRatio = files.length ? Math.min(1, clutterItems / files.length) : 0;
+  const diskUsageRatio = scopedDiskTotal > 0 ? Math.min(1, scopedTotalSize / scopedDiskTotal) : 0;
   const scopeLabel = selectedFolders.length
     ? selectedFolders.length === 1
       ? selectedFolders[0]
       : `${selectedFolders.length} ${t("foldersSelected")}`
     : t("userSpaceHint");
   const metrics = [
-    { label: t("files"), value: snapshot.stats.totalFiles.toLocaleString(), tone: "blue" },
+    { label: t("files"), value: files.length.toLocaleString(), tone: "blue" },
     { label: t("clutterRatio"), value: percent(clutterRatio), tone: "red" }
   ];
-  const analysedSize = splitDisplaySize(formatBytes(snapshot.stats.totalSize));
+  const analysedSize = splitDisplaySize(formatBytes(scopedTotalSize));
 
   return (
     <div className="scanner-stage scanner-demo-stage page-enter">
@@ -788,17 +921,29 @@ function ScannerView({
       <section className="scanner-actions scanner-demo-actions">
         <button className="glass-button scanner-demo-primary" onClick={scanCommon} disabled={isScanning}>
           <RefreshCw size={18} />
-          <span>{isScanning ? t("scanning") : "全盘智能析构"}</span>
+          <span>{isScanning ? t("scanning") : t("scanCommon")}</span>
         </button>
-        <button className="glass-button scanner-demo-secondary" onClick={chooseFolders} disabled={isScanning}>
-          <FolderSearch size={18} />
-          <span>分析 ~/Downloads</span>
-        </button>
+        {isScanning ? (
+          <button className="glass-button scanner-demo-secondary" onClick={cancelScan}>
+            <X size={18} />
+            <span>{t("cancelScan")}</span>
+          </button>
+        ) : (
+          <button className="glass-button scanner-demo-secondary" onClick={chooseFolders}>
+            <FolderSearch size={18} />
+            <span>{t("chooseFolders")}</span>
+          </button>
+        )}
       </section>
 
       <p className="scanner-scope-text">{scopeLabel}</p>
       <p className="scanner-scope-text scanner-detail-text">
-        {t("diskUsageInScope").replace("{size}", formatBytes(snapshot.stats.totalSize)).replace("{disk}", formatBytes(snapshot.stats.diskTotalSize))}
+        {isScanning && scanProgress
+          ? t("scanProgressLine")
+              .replace("{files}", scanProgress.scannedFiles.toLocaleString())
+              .replace("{skipped}", scanProgress.skipped.toLocaleString())
+              .replace("{path}", compactPath(scanProgress.currentPath))
+          : t("diskUsageInScope").replace("{size}", formatBytes(scopedTotalSize)).replace("{disk}", formatBytes(scopedDiskTotal))}
       </p>
     </div>
   );
@@ -906,22 +1051,24 @@ function HubView({
 }
 
 function VaultView({
-  files,
+  page,
   selectedFile,
   query,
   setQuery,
   setSelectedFileId,
+  isLoading,
+  onLoadMore,
   t
 }: {
-  files: FileRecord[];
+  page: FileQueryResult;
   selectedFile?: FileRecord;
   query: FileQuery;
   setQuery: (query: FileQuery) => void;
   setSelectedFileId: (id: string) => void;
+  isLoading: boolean;
+  onLoadMore: () => void;
   t: Translator;
 }) {
-  const pageSize = 50;
-  const [visibleCount, setVisibleCount] = useState(pageSize);
   const filters = [
     {
       key: "all",
@@ -955,12 +1102,8 @@ function VaultView({
       : query.lifecycle === "Archive"
         ? "archive"
         : "all";
-  const visibleFiles = useMemo(() => files.slice(0, visibleCount), [files, visibleCount]);
-  const remainingCount = Math.max(0, files.length - visibleFiles.length);
-
-  useEffect(() => {
-    setVisibleCount(pageSize);
-  }, [activeFilterKey, files.length]);
+  const visibleFiles = page.files;
+  const remainingCount = Math.max(0, page.total - visibleFiles.length);
 
   return (
     <div className="vault-layout page-enter">
@@ -985,7 +1128,8 @@ function VaultView({
       </div>
       <p className="vault-helper">{t("libraryIntro")}</p>
       <div className="vault-count-line">
-        <span>{t("libraryShowing").replace("{visible}", String(visibleFiles.length)).replace("{total}", String(files.length))}</span>
+        <span>{t("libraryShowing").replace("{visible}", String(visibleFiles.length)).replace("{total}", String(page.total))}</span>
+        {isLoading && <em>{t("loading")}</em>}
       </div>
       <section className="vault-grid">
         {visibleFiles.map((file) => (
@@ -1007,9 +1151,9 @@ function VaultView({
         ))}
       </section>
       {remainingCount > 0 && (
-        <button className="glass-button vault-load-more" onClick={() => setVisibleCount((count) => count + pageSize)}>
+        <button className="glass-button vault-load-more" onClick={onLoadMore} disabled={isLoading}>
           <Plus size={16} />
-          {t("loadMoreFiles").replace("{count}", String(Math.min(pageSize, remainingCount)))}
+          {t("loadMoreFiles").replace("{count}", String(Math.min(page.limit, remainingCount)))}
         </button>
       )}
     </div>
@@ -2027,6 +2171,12 @@ function splitDisplaySize(label: string) {
   };
 }
 
+function compactPath(value: string | null | undefined, maxLength = 42) {
+  if (!value) return "-";
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(8, Math.floor(maxLength * 0.45)))}...${value.slice(-Math.max(8, Math.floor(maxLength * 0.35)))}`;
+}
+
 function delay(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 }
@@ -2369,6 +2519,25 @@ function fileBelongsToRoots(file: FileRecord, roots: string[]): boolean {
     const normalizedRoot = normalizePathLike(root);
     return filePath === normalizedRoot || filePath.startsWith(`${normalizedRoot}/`);
   });
+}
+
+function samePathLike(left: string, right: string): boolean {
+  return normalizePathLike(left) === normalizePathLike(right);
+}
+
+function sumUniqueDiskTotal(roots: AppSnapshot["scanRoots"]): number {
+  const seen = new Set<string>();
+  let total = 0;
+  for (const root of roots) {
+    const value = Number(root.disk_total_size ?? 0);
+    if (!value) continue;
+    const normalized = normalizePathLike(root.path);
+    const volume = normalized.match(/^[a-z]:/)?.[0] ?? normalized.split("/")[0] ?? normalized;
+    if (seen.has(volume)) continue;
+    seen.add(volume);
+    total += value;
+  }
+  return total;
 }
 
 function preferredLanguage(): Language {

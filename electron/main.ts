@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { watch } from "chokidar";
 import { Database } from "../src/core/database.js";
-import { scanRoots } from "../src/core/fileScanner.js";
+import { scanRoots, ScanCanceledError } from "../src/core/fileScanner.js";
 import { executeOperations } from "../src/core/operationExecutor.js";
 import { createRestorePreview, restoreBatch } from "../src/core/restoreExecutor.js";
 import { applyAllRulesToFiles } from "../src/core/ruleEngine.js";
@@ -16,6 +16,8 @@ import type {
   FolderNamingLanguage,
   RestoreRetentionDays,
   Rule,
+  ScanProgress,
+  ScanResult,
   SearchQuery,
   SearchSource
 } from "../src/types/domain.js";
@@ -28,6 +30,8 @@ let searchWatcher: ReturnType<typeof watch> | null = null;
 let registeredSearchHotkey = "CommandOrControl+K";
 let isQuitting = false;
 let suppressSearchStaleUntil = 0;
+let staleNotifyTimer: NodeJS.Timeout | null = null;
+let currentScanAbort: AbortController | null = null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev: boolean = Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.NODE_ENV === "development";
@@ -179,7 +183,15 @@ function normalizeRestoreRetentionDays(days: number): RestoreRetentionDays {
 function rebuildSearchIndexClean() {
   const state = db.rebuildSearchIndex();
   suppressSearchStaleUntil = Date.now() + 3000;
+  clearPendingStaleNotify();
   return state;
+}
+
+function clearPendingStaleNotify() {
+  if (staleNotifyTimer) {
+    clearTimeout(staleNotifyTimer);
+    staleNotifyTimer = null;
+  }
 }
 
 function positionSearchWindow() {
@@ -199,6 +211,105 @@ function refreshWindowIcons() {
     window.setIcon(icon);
   }
   tray?.setImage(icon);
+}
+
+async function scanAndIndexPaths(
+  sender: Electron.WebContents,
+  rootPaths: string[]
+): Promise<ScanResult> {
+  currentScanAbort?.abort();
+  const controller = new AbortController();
+  currentScanAbort = controller;
+  const scanId = `scan-${Date.now().toString(36)}`;
+  const startedAt = new Date().toISOString();
+
+  try {
+    const result = await scanRoots(rootPaths, {
+      signal: controller.signal,
+      onProgress: (progress) => sendScanProgress(sender, scanId, progress)
+    });
+    throwIfScanCanceled(controller);
+    sendScanProgress(sender, scanId, {
+      phase: "indexing",
+      currentPath: null,
+      scannedFiles: result.files.length,
+      indexedFiles: 0,
+      skipped: result.skipped.length,
+      summarized: result.roots.reduce((sum, root) => sum + Number(root.summarized_count ?? 0), 0),
+      rootsTotal: result.roots.length,
+      rootsDone: result.roots.length,
+      message: "Applying rules"
+    });
+    const rules = db.getRules();
+    const classified = applyClassification(result.files, rules);
+    throwIfScanCanceled(controller);
+    db.upsertScanRoots(result.roots);
+    db.replaceFilesForRoots(result.roots, classified);
+    rebuildSearchIndexClean();
+    await refreshSearchWatcher();
+    sendScanProgress(sender, scanId, {
+      phase: "done",
+      currentPath: null,
+      scannedFiles: classified.length,
+      indexedFiles: classified.length,
+      skipped: result.skipped.length,
+      summarized: result.roots.reduce((sum, root) => sum + Number(root.summarized_count ?? 0), 0),
+      rootsTotal: result.roots.length,
+      rootsDone: result.roots.length,
+      message: "Scan completed"
+    });
+    return { ...result, files: classified };
+  } catch (error) {
+    if (error instanceof ScanCanceledError || controller.signal.aborted) {
+      sendScanProgress(sender, scanId, {
+        phase: "canceled",
+        currentPath: null,
+        scannedFiles: 0,
+        indexedFiles: 0,
+        skipped: 0,
+        summarized: 0,
+        rootsTotal: rootPaths.length,
+        rootsDone: 0,
+        message: "Scan canceled"
+      });
+      return {
+        roots: [],
+        files: [],
+        skipped: [],
+        scannedAt: startedAt,
+        canceled: true
+      };
+    }
+    sendScanProgress(sender, scanId, {
+      phase: "error",
+      currentPath: null,
+      scannedFiles: 0,
+      indexedFiles: 0,
+      skipped: 0,
+      summarized: 0,
+      rootsTotal: rootPaths.length,
+      rootsDone: 0,
+      message: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  } finally {
+    if (currentScanAbort === controller) {
+      currentScanAbort = null;
+    }
+  }
+}
+
+function sendScanProgress(
+  sender: Electron.WebContents,
+  scanId: string,
+  progress: Omit<ScanProgress, "scanId">
+) {
+  if (sender.isDestroyed()) return;
+  sender.send("scan:progress", { scanId, ...progress });
+}
+
+function throwIfScanCanceled(controller: AbortController) {
+  if (controller.signal.aborted) throw new ScanCanceledError();
 }
 
 async function createSearchWindow() {
@@ -259,18 +370,11 @@ async function createSearchWindow() {
 function registerIpc() {
   ipcMain.handle("app:getSnapshot", async () => db.getSnapshot());
 
-  ipcMain.handle("scan:defaults", async () => {
-    const result = await scanRoots(getDefaultScanPaths());
-    const rules = db.getRules();
-    const classified = applyClassification(result.files, rules);
-    db.upsertScanRoots(result.roots);
-    db.replaceFilesForRoots(result.roots, classified);
-    rebuildSearchIndexClean();
-    await refreshSearchWatcher();
-    return { ...result, files: classified };
+  ipcMain.handle("scan:defaults", async (event) => {
+    return scanAndIndexPaths(event.sender, getDefaultScanPaths());
   });
 
-  ipcMain.handle("scan:chooseFolders", async () => {
+  ipcMain.handle("scan:chooseFolders", async (event) => {
     const dialogOptions: Electron.OpenDialogOptions = {
       title: "Choose folders to scan",
       properties: ["openDirectory", "multiSelections"]
@@ -290,17 +394,17 @@ function registerIpc() {
       };
     }
 
-    const result = await scanRoots(selected.filePaths);
-    const rules = db.getRules();
-    const classified = applyClassification(result.files, rules);
-    db.upsertScanRoots(result.roots);
-    db.replaceFilesForRoots(result.roots, classified);
-    rebuildSearchIndexClean();
-    await refreshSearchWatcher();
-    return { ...result, files: classified, canceled: false, selectedPaths: selected.filePaths };
+    const result = await scanAndIndexPaths(event.sender, selected.filePaths);
+    return { ...result, canceled: Boolean(result.canceled), selectedPaths: selected.filePaths };
   });
 
-  ipcMain.handle("files:query", async (_event, query: FileQuery) => db.queryFiles(query));
+  ipcMain.handle("scan:cancel", async () => {
+    const hadScan = Boolean(currentScanAbort);
+    currentScanAbort?.abort();
+    return hadScan;
+  });
+
+  ipcMain.handle("files:query", async (_event, query: FileQuery) => db.queryFilesPage(query));
 
   ipcMain.handle("search:query", async (_event, query: SearchQuery) => db.searchFiles(query));
 
@@ -525,13 +629,23 @@ async function refreshSearchWatcher() {
   const markStale = (changedPath: string) => {
     if (Date.now() < suppressSearchStaleUntil) return;
     db.markSearchSourceStaleByPath(changedPath);
-    mainWindow?.webContents.send("search:stale", db.getSearchIndexState());
+    scheduleStaleNotify();
   };
   searchWatcher.on("add", markStale);
   searchWatcher.on("change", markStale);
   searchWatcher.on("unlink", markStale);
   searchWatcher.on("unlinkDir", markStale);
   searchWatcher.on("error", () => undefined);
+}
+
+function scheduleStaleNotify() {
+  clearPendingStaleNotify();
+  staleNotifyTimer = setTimeout(() => {
+    staleNotifyTimer = null;
+    const state = db.getSearchIndexState();
+    mainWindow?.webContents.send("search:stale", state);
+    searchWindow?.webContents.send("search:stale", state);
+  }, 1200);
 }
 
 function shouldIgnoreWatchPath(targetPath: string): boolean {
@@ -574,6 +688,8 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", () => {
   isQuitting = true;
+  currentScanAbort?.abort();
+  clearPendingStaleNotify();
   globalShortcut.unregisterAll();
   searchWindow?.destroy();
   void searchWatcher?.close();

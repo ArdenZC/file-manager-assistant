@@ -6184,3 +6184,44 @@ html.search-window-root .command-backdrop.standalone {
   color: var(--danger);
   font-size: 12px;
 }
+
+.bucket-dropzone {
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.preview-folder-card {
+  max-height: min(620px, calc(100vh - 230px));
+  overflow: hidden;
+}
+
+.preview-subfolder-list,
+.preview-folder-files.compact {
+  min-height: 0;
+}
+
+.preview-subfolder-list {
+  max-height: min(520px, calc(100vh - 310px));
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.vault-count-line {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vault-count-line em {
+  color: var(--primary);
+  font-style: normal;
+  font-weight: 680;
+}
+
+.scanner-detail-text {
+  max-width: min(760px, 92vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

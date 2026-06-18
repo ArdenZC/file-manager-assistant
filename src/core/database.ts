@@ -5,6 +5,7 @@ import type {
   AppSnapshot,
   DashboardStats,
   FileQuery,
+  FileQueryResult,
   FileRecord,
   FolderNamingLanguage,
   OperationLog,
@@ -47,11 +48,10 @@ export class Database {
   }
 
   getSnapshot(): AppSnapshot {
-    const files = this.getAllFiles();
     const scanRoots = this.getScanRoots();
     return {
-      stats: buildStats(files, scanRoots),
-      files,
+      stats: this.getDashboardStats(scanRoots),
+      files: this.queryFilesPage({ limit: 50, offset: 0, sortBy: "modified_at", sortDirection: "desc" }).files,
       rules: this.getRules(),
       operations: this.getOperationLogs(),
       scanRoots,
@@ -196,13 +196,17 @@ export class Database {
   }
 
   queryFiles(query: FileQuery): FileRecord[] {
+    return this.queryFilesPage(query).files;
+  }
+
+  queryFilesPage(query: FileQuery): FileQueryResult {
     const clauses = ["is_deleted = 0"];
     const params: Record<string, unknown> = {};
     const search = query.search?.trim();
 
     if (search) {
-      clauses.push("(name LIKE @search OR path LIKE @search OR context LIKE @search)");
-      params.search = `%${escapeLike(search)}%`;
+      clauses.push("(name LIKE @search ESCAPE '!' OR path LIKE @search ESCAPE '!' OR context LIKE @search ESCAPE '!')");
+      params.search = `%${escapeSqlLike(search)}%`;
     }
     if (query.fileType && query.fileType !== "All") {
       clauses.push("file_type = @fileType");
@@ -221,8 +225,23 @@ export class Database {
       params.riskLevel = query.riskLevel;
     }
     if (query.sourceDirectory) {
-      clauses.push("directory LIKE @sourceDirectory");
-      params.sourceDirectory = `%${escapeLike(query.sourceDirectory)}%`;
+      clauses.push("directory LIKE @sourceDirectory ESCAPE '!'");
+      params.sourceDirectory = `%${escapeSqlLike(query.sourceDirectory)}%`;
+    }
+    if (query.roots?.length) {
+      const rootClauses: string[] = [];
+      query.roots.filter(Boolean).forEach((root, index) => {
+        const normalizedRoot = path.resolve(root);
+        const rootWithSeparator = normalizedRoot.endsWith(path.sep) ? normalizedRoot : `${normalizedRoot}${path.sep}`;
+        const rootParam = `root${index}`;
+        const prefixParam = `rootPrefix${index}`;
+        rootClauses.push(`(path = @${rootParam} OR path LIKE @${prefixParam} ESCAPE '!')`);
+        params[rootParam] = normalizedRoot;
+        params[prefixParam] = `${escapeSqlLike(rootWithSeparator)}%`;
+      });
+      if (rootClauses.length) {
+        clauses.push(`(${rootClauses.join(" OR ")})`);
+      }
     }
     if (query.onlyActionable) {
       clauses.push("suggested_action != 'Keep'");
@@ -234,10 +253,20 @@ export class Database {
     const allowedSort = new Set(["name", "size", "modified_at", "confidence"]);
     const sortBy = allowedSort.has(query.sortBy ?? "") ? query.sortBy : "modified_at";
     const direction = query.sortDirection === "asc" ? "ASC" : "DESC";
-    return this.selectFiles(
-      `SELECT * FROM files WHERE ${clauses.join(" AND ")} ORDER BY ${sortBy} ${direction} LIMIT 1000`,
-      params
+    const limit = clampInteger(query.limit, 1, 500, 50);
+    const offset = clampInteger(query.offset, 0, 1_000_000, 0);
+    const whereSql = clauses.join(" AND ");
+    const totalRow = this.db.prepare(`SELECT COUNT(*) AS total FROM files WHERE ${whereSql}`).get(params) as Row;
+    const files = this.selectFiles(
+      `SELECT * FROM files WHERE ${whereSql} ORDER BY ${sortBy} ${direction} LIMIT @limit OFFSET @offset`,
+      { ...params, limit, offset }
     );
+    return {
+      files,
+      total: Number(totalRow.total ?? 0),
+      limit,
+      offset
+    };
   }
 
   searchFiles(query: SearchQuery): SearchResult[] {
@@ -650,6 +679,50 @@ export class Database {
       .run({ threshold });
   }
 
+  getDashboardStats(scanRoots = this.getScanRoots()): DashboardStats {
+    const aggregate = this.db.prepare(`
+      SELECT
+        COUNT(*) AS totalFiles,
+        COALESCE(SUM(size), 0) AS totalSize,
+        COALESCE(SUM(CASE WHEN is_duplicate = 1 THEN 1 ELSE 0 END), 0) AS duplicateFiles,
+        COALESCE(SUM(CASE WHEN size > 1073741824 THEN 1 ELSE 0 END), 0) AS largeFiles,
+        COALESCE(SUM(CASE WHEN risk_level = 'Sensitive' THEN 1 ELSE 0 END), 0) AS sensitiveFiles,
+        COALESCE(SUM(CASE WHEN requires_confirmation = 1 THEN 1 ELSE 0 END), 0) AS needsConfirmation,
+        MAX(scanned_at) AS lastScannedAt
+      FROM files
+      WHERE is_deleted = 0
+    `).get() as Row;
+    const byTypeRows = this.db.prepare(`
+      SELECT file_type AS key, COUNT(*) AS count
+      FROM files
+      WHERE is_deleted = 0
+      GROUP BY file_type
+    `).all() as Row[];
+    const byLifecycleRows = this.db.prepare(`
+      SELECT lifecycle AS key, COUNT(*) AS count
+      FROM files
+      WHERE is_deleted = 0
+      GROUP BY lifecycle
+    `).all() as Row[];
+    const diskTotalSize = sumUniqueRootDiskMetric(scanRoots, "disk_total_size");
+    const diskFreeSize = sumUniqueRootDiskMetric(scanRoots, "disk_free_size");
+    const totalSize = Number(aggregate.totalSize ?? 0);
+    return {
+      totalFiles: Number(aggregate.totalFiles ?? 0),
+      totalSize,
+      diskTotalSize,
+      diskFreeSize,
+      diskUsageRatio: diskTotalSize > 0 ? Math.min(1, totalSize / diskTotalSize) : 0,
+      duplicateFiles: Number(aggregate.duplicateFiles ?? 0),
+      largeFiles: Number(aggregate.largeFiles ?? 0),
+      sensitiveFiles: Number(aggregate.sensitiveFiles ?? 0),
+      needsConfirmation: Number(aggregate.needsConfirmation ?? 0),
+      byType: Object.fromEntries(byTypeRows.map((row) => [String(row.key), Number(row.count ?? 0)])),
+      byLifecycle: Object.fromEntries(byLifecycleRows.map((row) => [String(row.key), Number(row.count ?? 0)])),
+      lastScannedAt: aggregate.lastScannedAt ? String(aggregate.lastScannedAt) : null
+    };
+  }
+
   private selectFiles(sql: string, params: Record<string, unknown> = {}): FileRecord[] {
     return (this.db.prepare(sql).all(params) as Row[]).map(deserializeFile);
   }
@@ -1051,6 +1124,11 @@ function escapeLike(value: string): string {
 
 function escapeSqlLike(value: string): string {
   return value.replace(/[!%_]/g, (char) => `!${char}`);
+}
+
+function clampInteger(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(Number(value))));
 }
 
 function sourceIdForPath(directory: string): string {

@@ -5,6 +5,7 @@ import type {
   DefaultScanFolder,
   ExecuteOperationRequest,
   FileQuery,
+  FileQueryResult,
   FolderNamingLanguage,
   FolderScanResult,
   RestoreBatch,
@@ -12,6 +13,7 @@ import type {
   RestorePreview,
   RestoreRetentionDays,
   Rule,
+  ScanProgress,
   ScanResult,
   SearchIndexState,
   SearchQuery,
@@ -24,7 +26,8 @@ const api = {
   getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke("app:getSnapshot"),
   scanDefaults: (): Promise<ScanResult> => ipcRenderer.invoke("scan:defaults"),
   chooseAndScanFolders: (): Promise<FolderScanResult> => ipcRenderer.invoke("scan:chooseFolders"),
-  queryFiles: (query: FileQuery) => ipcRenderer.invoke("files:query", query),
+  cancelScan: (): Promise<boolean> => ipcRenderer.invoke("scan:cancel"),
+  queryFiles: (query: FileQuery): Promise<FileQueryResult> => ipcRenderer.invoke("files:query", query),
   saveRule: (rule: Rule) => ipcRenderer.invoke("rules:save", rule),
   deleteRule: (id: string) => ipcRenderer.invoke("rules:delete", id),
   reapplyRules: () => ipcRenderer.invoke("rules:reapply"),
@@ -94,6 +97,13 @@ const api = {
     ipcRenderer.on("app:close-requested", listener);
     return () => {
       ipcRenderer.removeListener("app:close-requested", listener);
+    };
+  },
+  onScanProgress: (callback: (progress: ScanProgress) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ScanProgress) => callback(progress);
+    ipcRenderer.on("scan:progress", listener);
+    return () => {
+      ipcRenderer.removeListener("scan:progress", listener);
     };
   },
   onSearchStale: (callback: (state: SearchIndexState) => void) => {

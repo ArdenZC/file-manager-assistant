@@ -78,6 +78,28 @@ describe("SQLite FTS search database", () => {
     expect(snapshot.stats.diskUsageRatio).toBeGreaterThan(0);
   });
 
+  it("pages file queries and filters them by active scan roots", () => {
+    const rootA = path.join(tempDir, "Downloads");
+    const rootB = path.join(tempDir, "Pictures");
+    const db = expectDatabase();
+    db.upsertScanRoots([makeRoot(rootA), makeRoot(rootB)]);
+    db.upsertFiles([
+      makeFile(path.join(rootA, "resume_2026.pdf"), "Career"),
+      makeFile(path.join(rootA, "invoice_apple.pdf"), "Finance"),
+      makeFile(path.join(rootB, "family.jpg"), "Media")
+    ]);
+
+    const firstPage = db.queryFilesPage({ limit: 2, offset: 0, sortBy: "name", sortDirection: "asc" });
+    const secondPage = db.queryFilesPage({ limit: 2, offset: 2, sortBy: "name", sortDirection: "asc" });
+    const scoped = db.queryFilesPage({ roots: [rootA], limit: 50, offset: 0 });
+
+    expect(firstPage.total).toBe(3);
+    expect(firstPage.files).toHaveLength(2);
+    expect(secondPage.files).toHaveLength(1);
+    expect(scoped.total).toBe(2);
+    expect(scoped.files.every((file) => file.path.startsWith(rootA))).toBe(true);
+  });
+
   it("prunes operation logs after the retention window", () => {
     const db = expectDatabase();
     const oldDate = new Date(Date.now() - 61 * 86_400_000).toISOString();

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scanRoots } from "../src/core/fileScanner";
+import { ScanCanceledError, scanRoots } from "../src/core/fileScanner";
 
 let tempDir = "";
 const testRoot = path.join(process.cwd(), ".tmp-tests");
@@ -79,5 +79,19 @@ describe("file scanner", () => {
     expect(names).not.toContain("debug.log");
     expect(names).not.toContain("desktop.ini");
     expect(result.roots[0].skipped_count).toBeGreaterThanOrEqual(2);
+  });
+
+  it("emits progress and respects cancellation", async () => {
+    await fs.writeFile(path.join(tempDir, "visible.pdf"), "visible");
+    const controller = new AbortController();
+    const phases: string[] = [];
+
+    controller.abort();
+
+    await expect(scanRoots([tempDir], {
+      signal: controller.signal,
+      onProgress: (progress) => phases.push(progress.phase)
+    })).rejects.toBeInstanceOf(ScanCanceledError);
+    expect(phases).toContain("queued");
   });
 });

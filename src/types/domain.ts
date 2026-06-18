@@ -180,6 +180,16 @@ export interface FileQuery {
   sortDirection?: "asc" | "desc";
   onlyActionable?: boolean;
   onlyNeedsConfirmation?: boolean;
+  roots?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface FileQueryResult {
+  files: FileRecord[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface DashboardStats {
@@ -322,11 +332,27 @@ export interface ScanResult {
   files: FileRecord[];
   skipped: Array<{ path: string; reason: string }>;
   scannedAt: string;
+  canceled?: boolean;
 }
 
 export interface FolderScanResult extends ScanResult {
   canceled: boolean;
   selectedPaths: string[];
+}
+
+export type ScanPhase = "queued" | "scanning" | "indexing" | "done" | "canceled" | "error";
+
+export interface ScanProgress {
+  scanId: string;
+  phase: ScanPhase;
+  currentPath: string | null;
+  scannedFiles: number;
+  indexedFiles: number;
+  skipped: number;
+  summarized: number;
+  rootsTotal: number;
+  rootsDone: number;
+  message?: string;
 }
 
 export interface AppSnapshot {
