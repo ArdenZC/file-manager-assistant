@@ -3433,6 +3433,18 @@ body,
   padding-right: 4px;
 }
 
+.preview-folder-files.compact.virtualized {
+  display: block;
+  max-height: min(430px, calc(100vh - 360px));
+  overflow-y: auto;
+  contain: strict;
+}
+
+.preview-virtual-row {
+  box-sizing: border-box;
+  padding-bottom: 8px;
+}
+
 .segmented {
   border-radius: 999px;
   padding: 3px;

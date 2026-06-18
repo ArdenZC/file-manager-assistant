@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeOperations } from "../src/core/operationExecutor";
+import { safeMoveFile } from "../src/core/fileMoves";
 import { isSafeFileName, validateOperationPreview } from "../src/core/operationGuards";
 import type { FileRecord, OperationPreview } from "../src/types/domain";
 
@@ -101,12 +102,33 @@ describe("operation execution safety", () => {
     await expect(fs.readFile(suffixedTarget, "utf8")).resolves.toBe("source");
   });
 
-  it("falls back to copy and unlink when rename reports a cross-device move", async () => {
+  it("reserves target paths before concurrent moves so duplicate targets get suffixes", async () => {
+    const sourceA = path.join(tempDir, "source-a.txt");
+    const sourceB = path.join(tempDir, "source-b.txt");
+    const target = path.join(tempDir, "merged.txt");
+    const suffixedTarget = path.join(tempDir, "merged (1).txt");
+    await fs.writeFile(sourceA, "A");
+    await fs.writeFile(sourceB, "B");
+
+    const fileA = makeFile(sourceA, { suggested_action: "Rename", suggested_name: "merged.txt" });
+    const fileB = makeFile(sourceB, { suggested_action: "Rename", suggested_name: "merged.txt" });
+    const operationA = makeOperation(fileA, target, "merged.txt", "rename");
+    const operationB = makeOperation(fileB, target, "merged.txt", "rename");
+
+    const result = await executeOperations([fileA, fileB], [operationA, operationB]);
+
+    expect(result.logs.map((log) => log.status)).toEqual(["success", "success"]);
+    expect(result.logs.map((log) => log.target_path)).toEqual([target, suffixedTarget]);
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("A");
+    await expect(fs.readFile(suffixedTarget, "utf8")).resolves.toBe("B");
+  });
+
+  it("falls back to copy and unlink when hard linking reports a cross-device move", async () => {
     const source = path.join(tempDir, "source.txt");
     const target = path.join(tempDir, "moved.txt");
     await fs.writeFile(source, "cross-device");
     const exdev = Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
-    vi.spyOn(fs, "rename").mockRejectedValueOnce(exdev);
+    vi.spyOn(fs, "link").mockRejectedValueOnce(exdev);
 
     const file = makeFile(source, { suggested_action: "Move", suggested_target_path: tempDir, suggested_name: "moved.txt" });
     const operation = makeOperation(file, target, "moved.txt", "move");
@@ -117,6 +139,17 @@ describe("operation execution safety", () => {
     expect(result.updatedFiles[0].path).toBe(target);
     await expect(fs.readFile(target, "utf8")).resolves.toBe("cross-device");
     await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not overwrite a target that appears before the move is attempted", async () => {
+    const source = path.join(tempDir, "source.txt");
+    const target = path.join(tempDir, "target.txt");
+    await fs.writeFile(source, "source");
+    await fs.writeFile(target, "existing");
+
+    await expect(safeMoveFile(source, target)).rejects.toMatchObject({ code: "EEXIST" });
+    await expect(fs.readFile(source, "utf8")).resolves.toBe("source");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("existing");
   });
 
   it("rejects protected system target folders", () => {

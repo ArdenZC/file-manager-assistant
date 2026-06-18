@@ -4,10 +4,17 @@ import path from "node:path";
 
 export async function safeMoveFile(sourcePath: string, targetPath: string) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  let linked = false;
   try {
-    await fs.rename(sourcePath, targetPath);
+    await fs.link(sourcePath, targetPath);
+    linked = true;
+    await fs.unlink(sourcePath);
   } catch (error) {
-    if (!isNodeErrorCode(error, "EXDEV")) throw error;
+    if (linked) {
+      await fs.unlink(targetPath).catch(() => undefined);
+    }
+    if (isNodeErrorCode(error, "EEXIST")) throw error;
+    if (!canFallbackToCopy(error)) throw error;
     await copyThenDeleteSource(sourcePath, targetPath);
   }
 }
@@ -38,4 +45,8 @@ async function preserveFileTimes(sourcePath: string, targetPath: string) {
 
 function isNodeErrorCode(error: unknown, code: string): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+}
+
+function canFallbackToCopy(error: unknown): boolean {
+  return ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "ENOSYS"].some((code) => isNodeErrorCode(error, code));
 }
