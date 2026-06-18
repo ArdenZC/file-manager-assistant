@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { motion, type Variants } from "motion/react";
 import { Check, ChevronRight, File, Folder, FolderSearch, Play, Plus, RefreshCw, RotateCcw, Search, X } from "lucide-react";
-import { tauriApi, type ScanProgressPayload } from "../api/tauriApi";
+import { tauriApi, type RuleExecutionSummary, type ScanProgressPayload } from "../api/tauriApi";
 import type { Language } from "../i18n";
 import type {
   CloseBehavior,
@@ -23,8 +25,35 @@ import {
   nowIso,
   splitDisplaySize
 } from "../utils/viewHelpers";
+import { shouldVirtualizeList } from "../utils/virtualization";
 
 const LIBRARY_PAGE_SIZE = 50;
+const HUB_FILE_ROW_HEIGHT = 82;
+const BUCKET_FILE_ROW_HEIGHT = 48;
+const ASSET_GRID_ROW_HEIGHT = 234;
+const PREVIEW_ROW_HEIGHT = 156;
+const RULE_ROW_HEIGHT = 68;
+
+const listMotion: Variants = {
+  hidden: {},
+  show: {
+    transition: {
+      staggerChildren: 0.035,
+      delayChildren: 0.03
+    }
+  }
+};
+
+const itemMotion: Variants = {
+  hidden: { opacity: 0, y: 14, scale: 0.985, filter: "blur(3px)" },
+  show: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    filter: "blur(0px)",
+    transition: { type: "spring", stiffness: 280, damping: 26 }
+  }
+};
 
 export function ScannerView({
   stats,
@@ -129,20 +158,29 @@ export function ScannerView({
   );
 }
 
-export function HubView({ files, setView, t }: { files: FileRecord[]; setView: (view: View) => void; t: Translator }) {
-  const [sortedIds, setSortedIds] = useState<Set<string>>(new Set());
-  const [isSorting, setIsSorting] = useState(false);
-  const visibleFiles = files.slice(0, 80);
-  const sortedFiles = visibleFiles.filter((file) => sortedIds.has(file.id));
-  const pendingFiles = visibleFiles.filter((file) => !sortedIds.has(file.id));
-  const buckets = [
+export function HubView({
+  files,
+  rules,
+  onRunDispatch,
+  setView,
+  t
+}: {
+  files: FileRecord[];
+  rules: Rule[];
+  onRunDispatch: () => Promise<RuleExecutionSummary | void>;
+  setView: (view: View) => void;
+  t: Translator;
+}) {
+  const [isDispatching, setIsDispatching] = useState(false);
+  const activeRuleCount = useMemo(() => rules.filter((rule) => rule.enabled).length, [rules]);
+  const sortedFiles = useMemo(() => files.filter(isRuleClassified), [files]);
+  const pendingFiles = useMemo(() => files.filter((file) => !isRuleClassified(file)), [files]);
+  const buckets = useMemo(() => [
     { key: "CoreAssets", label: t("coreAssets"), description: t("coreAssetsDesc"), tone: "blue" },
     { key: "QuietArchive", label: t("archiveBox"), description: t("archiveBoxDesc"), tone: "purple" },
     { key: "CleanupLane", label: t("cleanupLane"), description: t("cleanupLaneDesc"), tone: "slate" },
     { key: "PrivacyVault", label: t("privacyVault"), description: t("privacyVaultDesc"), tone: "red" }
-  ];
-
-  useEffect(() => setSortedIds(new Set()), [files]);
+  ], [t]);
 
   function fileBucket(file: FileRecord) {
     if (file.risk_level === "Sensitive") return "PrivacyVault";
@@ -151,18 +189,16 @@ export function HubView({ files, setView, t }: { files: FileRecord[]; setView: (
     return "CoreAssets";
   }
 
-  function runDispatch() {
-    if (isSorting || sortedIds.size === visibleFiles.length) {
+  async function runDispatch() {
+    if (isDispatching || !files.length) return;
+    setIsDispatching(true);
+    try {
+      await onRunDispatch();
+      setIsDispatching(false);
       setView("preview");
-      return;
+    } catch {
+      setIsDispatching(false);
     }
-    setIsSorting(true);
-    visibleFiles.forEach((file, index) => {
-      window.setTimeout(() => {
-        setSortedIds((current) => new Set(current).add(file.id));
-        if (index === visibleFiles.length - 1) setIsSorting(false);
-      }, Math.min(index * 24, 640));
-    });
   }
 
   return (
@@ -172,26 +208,28 @@ export function HubView({ files, setView, t }: { files: FileRecord[]; setView: (
           <h2>{t("inboxStack")}</h2>
           <span>{pendingFiles.length} {t("items")}</span>
         </div>
-        <div className="hub-inbox-list">
-          {pendingFiles.length ? pendingFiles.map((file, index) => (
-            <FileCard key={file.id} file={file} index={index} t={t} compact />
-          )) : (
-            <div className="hub-empty">
-              <Check size={24} />
-              <span>{t("dispatchClear")}</span>
-            </div>
-          )}
-        </div>
-        <button className="hub-dispatch-button" onClick={runDispatch} disabled={isSorting || !visibleFiles.length}>
-          {isSorting ? t("dispatching") : sortedIds.size === visibleFiles.length ? t("openPreview") : t("runDispatch")}
-        </button>
+        <VirtualFileCardList files={pendingFiles} t={t} />
+        <motion.button
+          whileTap={{ scale: 0.985 }}
+          className="hub-dispatch-button"
+          onClick={runDispatch}
+          disabled={isDispatching || !files.length}
+          title={`${activeRuleCount} active rules`}
+        >
+          {isDispatching ? t("dispatching") : t("runDispatch")}
+        </motion.button>
       </section>
 
-      <section className="hub-target-grid">
+      <motion.section className="hub-target-grid" variants={listMotion} initial="hidden" animate="show">
         {buckets.map((bucket) => {
           const bucketFiles = sortedFiles.filter((file) => fileBucket(file) === bucket.key);
           return (
-            <div className={`glass-panel target-bucket ${bucket.tone} ${bucketFiles.length ? "has-files" : ""}`} key={bucket.key}>
+            <motion.div
+              className={`glass-panel target-bucket ${bucket.tone} ${bucketFiles.length ? "has-files" : ""}`}
+              key={bucket.key}
+              variants={itemMotion}
+              layout
+            >
               <div className="bucket-head">
                 <div>
                   <h3>{bucket.label}</h3>
@@ -199,21 +237,142 @@ export function HubView({ files, setView, t }: { files: FileRecord[]; setView: (
                 </div>
                 <span>{bucketFiles.length}</span>
               </div>
-              <div className="bucket-dropzone">
-                {bucketFiles.length ? bucketFiles.map((file) => (
-                  <button className="bucket-file item-pop" key={file.id} onClick={() => setView("preview")}>
-                    <File size={15} />
-                    <span>{file.name}</span>
-                  </button>
-                )) : (
-                  <span>{t("waitingFlow")}</span>
-                )}
-              </div>
+              <VirtualBucketFileList files={bucketFiles} setView={setView} waitingLabel={t("waitingFlow")} />
+            </motion.div>
+          );
+        })}
+      </motion.section>
+    </div>
+  );
+}
+
+function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator }) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const shouldVirtualize = shouldVirtualizeList(files.length);
+  const rowVirtualizer = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => HUB_FILE_ROW_HEIGHT,
+    overscan: 8
+  });
+
+  if (!files.length) {
+    return (
+      <div className="hub-inbox-list">
+        <div className="hub-empty">
+          <Check size={24} />
+          <span>{t("dispatchClear")}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!shouldVirtualize) {
+    return (
+      <motion.div className="hub-inbox-list" variants={listMotion} initial="hidden" animate="show">
+        {files.map((file, index) => (
+          <FileCard key={file.id} file={file} index={index} t={t} compact />
+        ))}
+      </motion.div>
+    );
+  }
+
+  return (
+    <div ref={parentRef} className="hub-inbox-list virtual-list">
+      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const file = files[virtualRow.index];
+          return (
+            <div
+              className="virtual-row"
+              key={file.id}
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`
+              }}
+            >
+              <FileCard file={file} index={virtualRow.index} t={t} compact />
             </div>
           );
         })}
-      </section>
+      </div>
     </div>
+  );
+}
+
+function VirtualBucketFileList({
+  files,
+  setView,
+  waitingLabel
+}: {
+  files: FileRecord[];
+  setView: (view: View) => void;
+  waitingLabel: string;
+}) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const shouldVirtualize = shouldVirtualizeList(files.length);
+  const rowVirtualizer = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => BUCKET_FILE_ROW_HEIGHT,
+    overscan: 8
+  });
+
+  if (!files.length) {
+    return (
+      <div className="bucket-dropzone">
+        <span>{waitingLabel}</span>
+      </div>
+    );
+  }
+
+  if (!shouldVirtualize) {
+    return (
+      <motion.div className="bucket-dropzone" variants={listMotion} initial="hidden" animate="show">
+        {files.map((file) => (
+          <BucketFileButton file={file} key={file.id} setView={setView} />
+        ))}
+      </motion.div>
+    );
+  }
+
+  return (
+    <div ref={parentRef} className="bucket-dropzone virtual-list">
+      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const file = files[virtualRow.index];
+          return (
+            <div
+              className="virtual-row"
+              key={file.id}
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`
+              }}
+            >
+              <BucketFileButton file={file} setView={setView} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BucketFileButton({ file, setView }: { file: FileRecord; setView: (view: View) => void }) {
+  return (
+    <motion.button className="bucket-file item-pop" layout variants={itemMotion} onClick={() => setView("preview")}>
+      <File size={15} />
+      <span>{file.name}</span>
+    </motion.button>
+  );
+}
+
+function isRuleClassified(file: FileRecord): boolean {
+  return (
+    file.matched_rules.length > 0 ||
+    file.classification_reason !== "Indexed by Zen Canvas Tauri backend." ||
+    file.purpose !== "Unknown"
   );
 }
 
@@ -320,25 +479,11 @@ export function VaultView({
         {isLoading && <em>{t("loading")}</em>}
       </div>
       {error && <div className="system-toast inline">{error}</div>}
-      <section className="vault-grid">
-        {page.files.map((file) => (
-          <button
-            key={file.id}
-            className={`asset-card glass-panel ${selectedFile?.id === file.id ? "selected" : ""}`}
-            onClick={() => setSelectedFileId(file.id)}
-          >
-            <div className={`asset-icon ${file.risk_level === "Sensitive" ? "red" : file.lifecycle === "Archive" ? "purple" : "blue"}`}>
-              <File size={24} />
-            </div>
-            <h3>{file.name}</h3>
-            <div className="asset-meta">
-              <span>{file.lifecycle}</span>
-              <strong>{formatBytes(file.size)}</strong>
-            </div>
-            <small>{file.directory || file.path}</small>
-          </button>
-        ))}
-      </section>
+      <VirtualAssetGrid
+        files={page.files}
+        selectedFileId={selectedFile?.id}
+        setSelectedFileId={setSelectedFileId}
+      />
       <div ref={sentinelRef} className="vault-load-sentinel" />
       {hasMore && (
         <button className="glass-button vault-load-more" onClick={() => void loadPage(page.files.length, true)} disabled={isLoading}>
@@ -349,6 +494,114 @@ export function VaultView({
     </div>
   );
 }
+
+function VirtualAssetGrid({
+  files,
+  selectedFileId,
+  setSelectedFileId
+}: {
+  files: FileRecord[];
+  selectedFileId?: string;
+  setSelectedFileId: (id: string) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const [columns, setColumns] = useState(4);
+  const shouldVirtualize = shouldVirtualizeList(files.length);
+  const rowCount = Math.ceil(files.length / columns);
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ASSET_GRID_ROW_HEIGHT,
+    overscan: 4
+  });
+
+  useEffect(() => {
+    const node = parentRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      const nextColumns = Math.max(1, Math.min(4, Math.floor(width / 220)));
+      setColumns(nextColumns || 1);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  if (!shouldVirtualize) {
+    return (
+      <motion.section className="vault-grid" variants={listMotion} initial="hidden" animate="show">
+        {files.map((file) => (
+          <AssetCard
+            file={file}
+            isSelected={selectedFileId === file.id}
+            key={file.id}
+            setSelectedFileId={setSelectedFileId}
+          />
+        ))}
+      </motion.section>
+    );
+  }
+
+  return (
+    <section ref={parentRef} className="vault-grid-virtual virtual-list">
+      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const start = virtualRow.index * columns;
+          const rowFiles = files.slice(start, start + columns);
+          return (
+            <div
+              className="vault-virtual-row"
+              key={virtualRow.key}
+              style={{
+                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`
+              }}
+            >
+              {rowFiles.map((file) => (
+                <AssetCard
+                  file={file}
+                  isSelected={selectedFileId === file.id}
+                  key={file.id}
+                  setSelectedFileId={setSelectedFileId}
+                />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+const AssetCard = memo(function AssetCard({
+  file,
+  isSelected,
+  setSelectedFileId
+}: {
+  file: FileRecord;
+  isSelected: boolean;
+  setSelectedFileId: (id: string) => void;
+}) {
+  return (
+    <motion.button
+      className={`asset-card glass-panel ${isSelected ? "selected" : ""}`}
+      layout
+      variants={itemMotion}
+      onClick={() => setSelectedFileId(file.id)}
+    >
+      <div className={`asset-icon ${file.risk_level === "Sensitive" ? "red" : file.lifecycle === "Archive" ? "purple" : "blue"}`}>
+        <File size={24} />
+      </div>
+      <h3>{file.name}</h3>
+      <div className="asset-meta">
+        <span>{file.lifecycle}</span>
+        <strong>{formatBytes(file.size)}</strong>
+      </div>
+      <small>{file.directory || file.path}</small>
+    </motion.button>
+  );
+});
 
 export function TimelineView({
   previews,
@@ -437,32 +690,13 @@ export function TimelineView({
                           </div>
                           <em>{subgroup.items.length}</em>
                         </div>
-                        <div className="preview-folder-files compact">
-                          {subgroup.items.map((preview) => (
-                            <div className="preview-file-row" key={preview.id}>
-                              <input
-                                type="checkbox"
-                                disabled={preview.is_executable === false}
-                                checked={selectedIds.has(preview.id)}
-                                onChange={() => toggle(preview.id)}
-                              />
-                              <File size={15} />
-                              <div>
-                                <strong>{preview.old_name}</strong>
-                                <span>{preview.operation_type} / {percent(preview.confidence)}</span>
-                                <code className="preview-path-line" title={preview.source_path}>{preview.source_path}</code>
-                                <code className="preview-path-line target" title={preview.target_path}>{preview.target_path}</code>
-                                <input
-                                  className="inline-name-input"
-                                  value={preview.new_name}
-                                  disabled={!preview.editable_new_name || preview.is_executable === false}
-                                  onChange={(event) => onRenamePreview(preview.id, event.target.value)}
-                                  aria-label={t("newFileName")}
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                        <VirtualPreviewFileRows
+                          previews={subgroup.items}
+                          selectedIds={selectedIds}
+                          toggle={toggle}
+                          onRenamePreview={onRenamePreview}
+                          t={t}
+                        />
                       </section>
                     ))}
                   </div>
@@ -475,6 +709,113 @@ export function TimelineView({
     </div>
   );
 }
+
+function VirtualPreviewFileRows({
+  previews,
+  selectedIds,
+  toggle,
+  onRenamePreview,
+  t
+}: {
+  previews: OperationPreview[];
+  selectedIds: Set<string>;
+  toggle: (id: string) => void;
+  onRenamePreview: (id: string, name: string) => void;
+  t: Translator;
+}) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const shouldVirtualize = shouldVirtualizeList(previews.length);
+  const rowVirtualizer = useVirtualizer({
+    count: previews.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => PREVIEW_ROW_HEIGHT,
+    overscan: 6
+  });
+
+  if (!shouldVirtualize) {
+    return (
+      <motion.div className="preview-folder-files compact" variants={listMotion} initial="hidden" animate="show">
+        {previews.map((preview) => (
+          <PreviewFileRow
+            key={preview.id}
+            preview={preview}
+            isSelected={selectedIds.has(preview.id)}
+            toggle={toggle}
+            onRenamePreview={onRenamePreview}
+            t={t}
+          />
+        ))}
+      </motion.div>
+    );
+  }
+
+  return (
+    <div ref={parentRef} className="preview-folder-files compact virtualized virtual-list">
+      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const preview = previews[virtualRow.index];
+          return (
+            <div
+              className="virtual-row preview-virtual-row"
+              key={preview.id}
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`
+              }}
+            >
+              <PreviewFileRow
+                preview={preview}
+                isSelected={selectedIds.has(preview.id)}
+                toggle={toggle}
+                onRenamePreview={onRenamePreview}
+                t={t}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const PreviewFileRow = memo(function PreviewFileRow({
+  preview,
+  isSelected,
+  toggle,
+  onRenamePreview,
+  t
+}: {
+  preview: OperationPreview;
+  isSelected: boolean;
+  toggle: (id: string) => void;
+  onRenamePreview: (id: string, name: string) => void;
+  t: Translator;
+}) {
+  return (
+    <motion.div className="preview-file-row" layout variants={itemMotion}>
+      <input
+        type="checkbox"
+        disabled={preview.is_executable === false}
+        checked={isSelected}
+        onChange={() => toggle(preview.id)}
+      />
+      <File size={15} />
+      <div>
+        <strong>{preview.old_name}</strong>
+        <span>{preview.operation_type} / {percent(preview.confidence)}</span>
+        <code className="preview-path-line" title={preview.source_path}>{preview.source_path}</code>
+        <code className="preview-path-line target" title={preview.target_path}>{preview.target_path}</code>
+        <input
+          className="inline-name-input"
+          value={preview.new_name}
+          disabled={!preview.editable_new_name || preview.is_executable === false}
+          onChange={(event) => onRenamePreview(preview.id, event.target.value)}
+          aria-label={t("newFileName")}
+        />
+      </div>
+    </motion.div>
+  );
+});
 
 export function RulesView({ rules, onSave, t }: { rules: Rule[]; onSave: (rule: Rule) => Promise<void>; t: Translator }) {
   const [name, setName] = useState("Screenshots to Inbox");
@@ -545,22 +886,67 @@ export function RulesView({ rules, onSave, t }: { rules: Rule[]; onSave: (rule: 
 
       <section className="glass-panel rules-list-panel">
         <SectionTitle title={t("strategy")} body={t("ruleLayerDesc")} />
-        <div className="rule-list">
-          {rules.map((rule) => (
-            <div className="rule-row" key={rule.id}>
-              <div>
-                <strong>{rule.name}</strong>
-                <span>{rule.source} / weight {rule.weight} / priority {rule.priority}</span>
-              </div>
-              <span className={`source ${rule.source}`}>{rule.source}</span>
-              <span className={`toggle-switch ${rule.enabled ? "on" : ""}`} aria-hidden="true"><i /></span>
-            </div>
-          ))}
-        </div>
+        <VirtualRuleList rules={rules} />
       </section>
     </div>
   );
 }
+
+function VirtualRuleList({ rules }: { rules: Rule[] }) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const shouldVirtualize = shouldVirtualizeList(rules.length);
+  const rowVirtualizer = useVirtualizer({
+    count: rules.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => RULE_ROW_HEIGHT,
+    overscan: 8
+  });
+
+  if (!shouldVirtualize) {
+    return (
+      <motion.div className="rule-list" variants={listMotion} initial="hidden" animate="show">
+        {rules.map((rule) => (
+          <RuleRow key={rule.id} rule={rule} />
+        ))}
+      </motion.div>
+    );
+  }
+
+  return (
+    <div ref={parentRef} className="rule-list virtual-list rules-virtual-list">
+      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const rule = rules[virtualRow.index];
+          return (
+            <div
+              className="virtual-row"
+              key={rule.id}
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`
+              }}
+            >
+              <RuleRow rule={rule} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const RuleRow = memo(function RuleRow({ rule }: { rule: Rule }) {
+  return (
+    <motion.div className="rule-row" layout variants={itemMotion}>
+      <div>
+        <strong>{rule.name}</strong>
+        <span>{rule.source} / weight {rule.weight} / priority {rule.priority}</span>
+      </div>
+      <span className={`source ${rule.source}`}>{rule.source}</span>
+      <span className={`toggle-switch ${rule.enabled ? "on" : ""}`} aria-hidden="true"><i /></span>
+    </motion.div>
+  );
+});
 
 export function RestoreView({ t }: { t: Translator }) {
   return (
@@ -718,14 +1104,19 @@ export function SettingsView({
 
 function FileCard({ file, index, t, compact = false }: { file: FileRecord; index: number; t: Translator; compact?: boolean }) {
   return (
-    <button className={`file-card ${compact ? "compact" : ""}`} style={{ "--delay": `${Math.min(index * 18, 320)}ms` } as React.CSSProperties}>
+    <motion.button
+      className={`stack-card file-card ${compact ? "compact" : ""}`}
+      layout
+      variants={itemMotion}
+      style={{ "--delay": `${Math.min(index * 18, 320)}ms` } as CSSProperties}
+    >
       <File size={18} />
       <span>
         <strong>{file.name}</strong>
         <small>{file.purpose} / {formatBytes(file.size)}</small>
       </span>
       <em>{file.risk_level === "Sensitive" ? t("sensitiveLabel") : t("normal")}</em>
-    </button>
+    </motion.button>
   );
 }
 

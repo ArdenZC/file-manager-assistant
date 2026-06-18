@@ -8,8 +8,9 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
 pub use db::{
-    get_paged_files, get_stats_summary, init_db, insert_file, search_files, FileRecordDto,
-    FileSearchResult, InsertFileRequest, PagedFilesResult, StatsSummary,
+    execute_rules_on_inbox, get_paged_files, get_stats_summary, init_db, insert_file, search_files,
+    FileRecordDto, FileSearchResult, InsertFileRequest, PagedFilesResult, Rule,
+    RuleExecutionSummary, StatsSummary,
 };
 pub use file_ops::{
     execute_moves, move_file, rename_file, ExecuteMovesRequest, ExecuteMovesResult,

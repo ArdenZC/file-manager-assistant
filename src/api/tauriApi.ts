@@ -6,7 +6,8 @@ import type {
   ExecuteOperationResult,
   FileQueryResult,
   FileRecord,
-  OperationPreview
+  OperationPreview,
+  Rule
 } from "../types/domain";
 
 export interface ScannedEntry {
@@ -37,6 +38,12 @@ export interface ScanBatchPayload {
 }
 
 export type ScanSummary = ScanProgressPayload;
+
+export interface RuleExecutionSummary {
+  scanned: number;
+  updated: number;
+  needsConfirmation: number;
+}
 
 export interface TauriSearchFileResult {
   id: string;
@@ -85,6 +92,10 @@ export const tauriApi = {
   executeMoves(operations: OperationPreview[]): Promise<ExecuteOperationResult> {
     const request: ExecuteOperationRequest = { operations };
     return invokeCommand<ExecuteOperationResult>("execute_moves", { request });
+  },
+
+  executeRulesOnInbox(rules: Rule[]): Promise<RuleExecutionSummary> {
+    return invokeCommand<RuleExecutionSummary>("execute_rules_on_inbox", { rules });
   },
 
   initDatabase(): Promise<void> {

@@ -1,12 +1,13 @@
 use crate::db::{Database, DbError, InsertFileRequest};
-use jwalk::WalkDir;
+use jwalk::{ClientState, DirEntry, WalkDir};
 use serde::Serialize;
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     time::{Instant, UNIX_EPOCH},
 };
@@ -26,11 +27,11 @@ enum ScanError {
     MissingRoot(String),
     #[error("scan root is not a readable file-system path: {0}")]
     InvalidRoot(String),
-    #[error("io error at {path}: {source}")]
-    Io {
+    #[error("metadata error at {path}: {source}")]
+    Metadata {
         path: String,
         #[source]
-        source: std::io::Error,
+        source: jwalk::Error,
     },
     #[error("event emit failed: {0}")]
     Emit(#[from] tauri::Error),
@@ -151,24 +152,21 @@ fn scan_directory_blocking<R: Runtime>(
 
     for entry_result in walker {
         match entry_result {
-            Ok(entry) => {
-                let path = entry.path();
-                match entry_to_payload(&path, entry.file_name(), entry.file_type().is_dir()) {
-                    Ok(payload) => {
-                        counters.scanned += 1;
-                        if payload.is_dir {
-                            counters.directories += 1;
-                        } else {
-                            counters.files += 1;
-                        }
-                        batch.push(payload);
+            Ok(entry) => match entry_to_payload(&entry) {
+                Ok(payload) => {
+                    counters.scanned += 1;
+                    if payload.is_dir {
+                        counters.directories += 1;
+                    } else {
+                        counters.files += 1;
                     }
-                    Err(error) => {
-                        counters.errors += 1;
-                        emit_scan_error(&app, &root_label, error)?;
-                    }
+                    batch.push(payload);
                 }
-            }
+                Err(error) => {
+                    counters.errors += 1;
+                    emit_scan_error(&app, &root_label, error)?;
+                }
+            },
             Err(error) => {
                 counters.errors += 1;
                 app.emit(
@@ -273,7 +271,7 @@ fn emit_scan_error(
     error: ScanError,
 ) -> Result<(), ScanError> {
     let (path, message) = match error {
-        ScanError::Io { path, source } => (path, source.to_string()),
+        ScanError::Metadata { path, source } => (path, source.to_string()),
         other => (root.to_string(), other.to_string()),
     };
 
@@ -288,19 +286,17 @@ fn emit_scan_error(
     Ok(())
 }
 
-fn entry_to_payload(
-    path: &Path,
-    file_name: &OsStr,
-    is_dir: bool,
-) -> Result<ScannedEntry, ScanError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|source| ScanError::Io {
-        path: normalize_path(path),
+fn entry_to_payload<C: ClientState>(entry: &DirEntry<C>) -> Result<ScannedEntry, ScanError> {
+    let path = entry.path();
+    let is_dir = entry.file_type().is_dir();
+    let metadata = entry.metadata().map_err(|source| ScanError::Metadata {
+        path: normalize_path(&path),
         source,
     })?;
 
     Ok(ScannedEntry {
-        path: normalize_path(path),
-        name: file_name.to_string_lossy().into_owned(),
+        path: normalize_path(&path),
+        name: entry.file_name().to_string_lossy().into_owned(),
         extension: path
             .extension()
             .and_then(OsStr::to_str)
@@ -356,40 +352,73 @@ fn normalize_path(path: &Path) -> String {
 fn should_skip_dir(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
     let lower = name.to_ascii_lowercase();
+    let lower = lower.as_str();
 
-    matches!(
-        lower.as_str(),
-        ".git"
-            | ".hg"
-            | ".svn"
-            | ".idea"
-            | ".vscode"
-            | ".cache"
-            | ".parcel-cache"
-            | ".turbo"
-            | ".next"
-            | ".nuxt"
-            | ".venv"
-            | "__pycache__"
-            | "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | "coverage"
-            | "vendor"
-            | "venv"
-            | "pods"
-            | "deriveddata"
-            | "appdata"
-            | "library"
-            | "system volume information"
-            | "$recycle.bin"
-            | "windows"
-            | "program files"
-            | "program files (x86)"
-            | "programdata"
-            | "$windows.~bt"
-            | "$winreagent"
-            | "recovery"
-    )
+    skip_dir_names().contains(lower) || has_generated_dir_variant(lower)
+}
+
+fn skip_dir_names() -> &'static HashSet<&'static str> {
+    static SKIP_DIR_NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SKIP_DIR_NAMES.get_or_init(|| {
+        [
+            ".git",
+            ".hg",
+            ".svn",
+            ".idea",
+            ".vscode",
+            ".cache",
+            ".parcel-cache",
+            ".turbo",
+            ".next",
+            ".nuxt",
+            ".venv",
+            "__pycache__",
+            "node_modules",
+            "target",
+            "dist",
+            "build",
+            "coverage",
+            "vendor",
+            "venv",
+            "pods",
+            "deriveddata",
+            "appdata",
+            "library",
+            "system volume information",
+            "$recycle.bin",
+            "windows",
+            "program files",
+            "program files (x86)",
+            "programdata",
+            "$windows.~bt",
+            "$winreagent",
+            "recovery",
+        ]
+        .into_iter()
+        .collect()
+    })
+}
+
+fn has_generated_dir_variant(lower: &str) -> bool {
+    const VARIANT_BASES: &[&str] = &[".git", ".cache", "__pycache__", "node_modules"];
+    VARIANT_BASES.iter().any(|base| {
+        lower
+            .strip_prefix(base)
+            .is_some_and(|suffix| matches!(suffix.as_bytes().first(), Some(b'.' | b'-' | b'_')))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn should_skip_dir_matches_case_insensitive_generated_variants() {
+        assert!(should_skip_dir(OsStr::new("Node_Modules")));
+        assert!(should_skip_dir(OsStr::new("node_modules.cache")));
+        assert!(should_skip_dir(OsStr::new(".git-worktree")));
+        assert!(should_skip_dir(OsStr::new("System Volume Information")));
+        assert!(!should_skip_dir(OsStr::new("client-documents")));
+    }
 }

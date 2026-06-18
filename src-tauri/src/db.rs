@@ -1,7 +1,8 @@
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     collections::HashMap,
     fs,
@@ -20,6 +21,8 @@ pub enum DbError {
     Io(#[from] std::io::Error),
     #[error("database pool error: {0}")]
     Pool(#[from] r2d2::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Clone)]
@@ -38,6 +41,18 @@ struct IndexedFileRow {
     mtime: i64,
     is_dir: bool,
     state_code: i64,
+    file_type: String,
+    purpose: String,
+    lifecycle: String,
+    context: String,
+    risk_level: String,
+    suggested_action: String,
+    suggested_target_path: String,
+    suggested_name: String,
+    confidence: f64,
+    classification_reason: String,
+    matched_rules: String,
+    requires_confirmation: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,6 +144,73 @@ pub struct StatsSummary {
     pub last_scanned_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct Rule {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: f64,
+    #[serde(default)]
+    pub weight: f64,
+    #[serde(default = "default_or", alias = "rootOperator")]
+    pub root_operator: String,
+    #[serde(default)]
+    pub groups: Vec<RuleConditionGroup>,
+    #[serde(default)]
+    pub action: RuleAction,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuleConditionGroup {
+    pub id: String,
+    #[serde(default = "default_and")]
+    pub operator: String,
+    #[serde(default)]
+    pub conditions: Vec<RuleCondition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuleCondition {
+    pub id: String,
+    pub field: String,
+    pub operator: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RuleAction {
+    #[serde(default)]
+    pub purpose: Option<String>,
+    #[serde(default)]
+    pub lifecycle: Option<String>,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default, alias = "riskLevel")]
+    pub risk_level: Option<String>,
+    #[serde(default, alias = "suggestedAction")]
+    pub suggested_action: Option<String>,
+    #[serde(default, alias = "targetTemplate")]
+    pub target_template: Option<String>,
+    #[serde(default, alias = "renameTemplate")]
+    pub rename_template: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleExecutionSummary {
+    pub scanned: i64,
+    pub updated: i64,
+    pub needs_confirmation: i64,
+}
+
 impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref().to_path_buf();
@@ -170,9 +252,9 @@ impl Database {
             let mut stmt = tx.prepare(
                 r#"
             INSERT INTO files (
-                id, path, name, extension, size, mtime, is_dir, state_code
+                id, path, name, extension, size, mtime, is_dir, state_code, file_type, suggested_name
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 path = excluded.path,
                 name = excluded.name,
@@ -180,11 +262,18 @@ impl Database {
                 size = excluded.size,
                 mtime = excluded.mtime,
                 is_dir = excluded.is_dir,
-                state_code = excluded.state_code
+                state_code = excluded.state_code,
+                file_type = excluded.file_type,
+                suggested_name = CASE
+                    WHEN files.suggested_name = '' OR files.suggested_name = files.name
+                    THEN excluded.suggested_name
+                    ELSE files.suggested_name
+                END
             "#,
             )?;
 
             for file in files {
+                let file_type = infer_file_type(&file.extension, file.is_dir);
                 stmt.execute(params![
                     file.id,
                     file.path,
@@ -193,12 +282,89 @@ impl Database {
                     file.size,
                     file.mtime,
                     bool_to_i64(file.is_dir),
-                    file.state_code
+                    file.state_code,
+                    file_type,
+                    file.name
                 ])?;
             }
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn execute_rules_on_inbox(
+        &self,
+        rules: Vec<Rule>,
+    ) -> Result<RuleExecutionSummary, DbError> {
+        let mut conn = self.conn()?;
+        let rows = {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT id, path, name, extension, size, mtime, is_dir, state_code,
+                       file_type, purpose, lifecycle, context, risk_level, suggested_action,
+                       suggested_target_path, suggested_name, confidence, classification_reason,
+                       matched_rules, requires_confirmation
+                FROM files
+                ORDER BY mtime DESC, name COLLATE NOCASE ASC
+                "#,
+            )?;
+            let rows = stmt.query_map([], indexed_file_from_row)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut updated = 0_i64;
+        let mut needs_confirmation = 0_i64;
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                UPDATE files
+                SET file_type = ?2,
+                    purpose = ?3,
+                    lifecycle = ?4,
+                    context = ?5,
+                    risk_level = ?6,
+                    suggested_action = ?7,
+                    suggested_target_path = ?8,
+                    suggested_name = ?9,
+                    confidence = ?10,
+                    classification_reason = ?11,
+                    matched_rules = ?12,
+                    requires_confirmation = ?13
+                WHERE id = ?1
+                "#,
+            )?;
+
+            for row in &rows {
+                let classification = classify_indexed_file(row, &rules)?;
+                if classification.requires_confirmation {
+                    needs_confirmation += 1;
+                }
+                stmt.execute(params![
+                    row.id,
+                    classification.file_type,
+                    classification.purpose,
+                    classification.lifecycle,
+                    classification.context,
+                    classification.risk_level,
+                    classification.suggested_action,
+                    classification.suggested_target_path,
+                    classification.suggested_name,
+                    classification.confidence,
+                    classification.classification_reason,
+                    classification.matched_rules,
+                    bool_to_i64(classification.requires_confirmation)
+                ])?;
+                updated += 1;
+            }
+        }
+        tx.commit()?;
+
+        Ok(RuleExecutionSummary {
+            scanned: rows.len() as i64,
+            updated,
+            needs_confirmation,
+        })
     }
 
     pub fn search_files(
@@ -277,6 +443,18 @@ impl Database {
                     f.mtime,
                     f.is_dir,
                     f.state_code,
+                    f.file_type,
+                    f.purpose,
+                    f.lifecycle,
+                    f.context,
+                    f.risk_level,
+                    f.suggested_action,
+                    f.suggested_target_path,
+                    f.suggested_name,
+                    f.confidence,
+                    f.classification_reason,
+                    f.matched_rules,
+                    f.requires_confirmation,
                     bm25(files_fts, 6.0, 1.5) AS rank
                 FROM files_fts
                 JOIN files AS f ON f.rowid = files_fts.rowid
@@ -304,7 +482,10 @@ impl Database {
         let total = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, path, name, extension, size, mtime, is_dir, state_code
+            SELECT id, path, name, extension, size, mtime, is_dir, state_code,
+                   file_type, purpose, lifecycle, context, risk_level, suggested_action,
+                   suggested_target_path, suggested_name, confidence, classification_reason,
+                   matched_rules, requires_confirmation
             FROM files
             ORDER BY mtime DESC, name COLLATE NOCASE ASC
             LIMIT ?1 OFFSET ?2
@@ -342,30 +523,59 @@ impl Database {
                 row.get::<_, Option<i64>>(0)
             })?;
 
+        let sensitive_files = conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND (risk_level = 'Sensitive' OR lifecycle = 'Sensitive')",
+            [],
+            |row| row.get(0),
+        )?;
+        let needs_confirmation = conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND requires_confirmation = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
         let mut by_type = HashMap::new();
         let mut stmt = conn.prepare(
             r#"
-            SELECT extension, is_dir, COUNT(*)
+            SELECT file_type, extension, is_dir, COUNT(*)
             FROM files
-            GROUP BY extension, is_dir
+            GROUP BY file_type, extension, is_dir
             "#,
         )?;
         let type_rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)? != 0,
-                row.get::<_, i64>(2)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)? != 0,
+                row.get::<_, i64>(3)?,
             ))
         })?;
         for row in type_rows {
-            let (extension, is_dir, count) = row?;
-            *by_type
-                .entry(infer_file_type(&extension, is_dir).to_string())
-                .or_insert(0) += count;
+            let (file_type, extension, is_dir, count) = row?;
+            let normalized_type = if file_type.is_empty() || file_type == "Other" {
+                infer_file_type(&extension, is_dir).to_string()
+            } else {
+                file_type
+            };
+            *by_type.entry(normalized_type).or_insert(0) += count;
         }
 
         let mut by_lifecycle = HashMap::new();
-        by_lifecycle.insert("Inbox".to_string(), total_files);
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT lifecycle, COUNT(*)
+            FROM files
+            WHERE is_dir = 0
+            GROUP BY lifecycle
+            "#,
+        )?;
+        let lifecycle_rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in lifecycle_rows {
+            let (lifecycle, count) = row?;
+            by_lifecycle.insert(lifecycle, count);
+        }
 
         Ok(StatsSummary {
             total_files,
@@ -375,8 +585,8 @@ impl Database {
             disk_usage_ratio: 0.0,
             duplicate_files: 0,
             large_files,
-            sensitive_files: 0,
-            needs_confirmation: 0,
+            sensitive_files,
+            needs_confirmation,
             by_type,
             by_lifecycle,
             last_scanned_at: last_mtime.map(unix_seconds_to_iso),
@@ -423,6 +633,14 @@ pub fn get_stats_summary(db: State<'_, Database>) -> Result<StatsSummary, String
     db.get_stats_summary().map_err(command_error)
 }
 
+#[tauri::command]
+pub fn execute_rules_on_inbox(
+    db: State<'_, Database>,
+    rules: Vec<Rule>,
+) -> Result<RuleExecutionSummary, String> {
+    db.execute_rules_on_inbox(rules).map_err(command_error)
+}
+
 fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -451,16 +669,21 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
         CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
         CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
         CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
-            name,
-            path,
-            content='files',
-            content_rowid='rowid',
-            tokenize='unicode61 remove_diacritics 2',
-            prefix='2 3 4'
-        );
-
+        "#,
+    )?;
+    ensure_file_classification_columns(conn)?;
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type);
+        CREATE INDEX IF NOT EXISTS idx_files_purpose ON files(purpose);
+        CREATE INDEX IF NOT EXISTS idx_files_lifecycle ON files(lifecycle);
+        CREATE INDEX IF NOT EXISTS idx_files_risk_level ON files(risk_level);
+        CREATE INDEX IF NOT EXISTS idx_files_requires_confirmation ON files(requires_confirmation);
+        "#,
+    )?;
+    ensure_trigram_fts(conn)?;
+    conn.execute_batch(
+        r#"
         CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
             INSERT INTO files_fts(rowid, name, path)
             VALUES (new.rowid, new.name, new.path);
@@ -482,29 +705,155 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+fn ensure_file_classification_columns(conn: &Connection) -> Result<(), DbError> {
+    add_column_if_missing(
+        conn,
+        "file_type",
+        "ALTER TABLE files ADD COLUMN file_type TEXT NOT NULL DEFAULT 'Other'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "purpose",
+        "ALTER TABLE files ADD COLUMN purpose TEXT NOT NULL DEFAULT 'Unknown'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "lifecycle",
+        "ALTER TABLE files ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Inbox'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "context",
+        "ALTER TABLE files ADD COLUMN context TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "risk_level",
+        "ALTER TABLE files ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'Normal'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "suggested_action",
+        "ALTER TABLE files ADD COLUMN suggested_action TEXT NOT NULL DEFAULT 'Keep'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "suggested_target_path",
+        "ALTER TABLE files ADD COLUMN suggested_target_path TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "suggested_name",
+        "ALTER TABLE files ADD COLUMN suggested_name TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "confidence",
+        "ALTER TABLE files ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5",
+    )?;
+    add_column_if_missing(
+        conn,
+        "classification_reason",
+        "ALTER TABLE files ADD COLUMN classification_reason TEXT NOT NULL DEFAULT 'Indexed by Zen Canvas Tauri backend.'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "matched_rules",
+        "ALTER TABLE files ADD COLUMN matched_rules TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "requires_confirmation",
+        "ALTER TABLE files ADD COLUMN requires_confirmation INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn add_column_if_missing(conn: &Connection, column: &str, alter_sql: &str) -> Result<(), DbError> {
+    let exists = conn
+        .prepare("PRAGMA table_info(files)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(column));
+
+    if !exists {
+        conn.execute_batch(alter_sql)?;
+    }
+    Ok(())
+}
+
 fn assert_fts5_available(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(
         r#"
-        CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(value);
+        CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(value, tokenize='trigram');
         DROP TABLE temp.fts5_probe;
         "#,
     )?;
     Ok(())
 }
 
+fn ensure_trigram_fts(conn: &Connection) -> Result<(), DbError> {
+    let existing_sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'files_fts'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if existing_sql
+        .as_deref()
+        .map(is_trigram_fts_definition)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+        DROP TRIGGER IF EXISTS files_ai;
+        DROP TRIGGER IF EXISTS files_ad;
+        DROP TRIGGER IF EXISTS files_au;
+        DROP TABLE IF EXISTS files_fts;
+
+        CREATE VIRTUAL TABLE files_fts USING fts5(
+            name,
+            path,
+            content='files',
+            content_rowid='rowid',
+            tokenize='trigram'
+        );
+
+        INSERT INTO files_fts(files_fts) VALUES('rebuild');
+        "#,
+    )?;
+    Ok(())
+}
+
+fn is_trigram_fts_definition(sql: &str) -> bool {
+    let normalized = sql.to_ascii_lowercase().replace(char::is_whitespace, "");
+    normalized.contains("tokenize='trigram'") || normalized.contains("tokenize=\"trigram\"")
+}
+
 fn build_fts_query(input: &str) -> Option<String> {
-    let tokens = input
-        .split(|ch: char| !ch.is_alphanumeric())
-        .filter(|token| !token.is_empty())
+    let phrases = input
+        .trim()
+        .split_whitespace()
+        .filter(|phrase| !phrase.is_empty())
         .take(12)
-        .map(|token| format!("{}*", token.to_lowercase()))
+        .map(quote_fts_phrase)
         .collect::<Vec<_>>();
 
-    if tokens.is_empty() {
+    if phrases.is_empty() {
         None
     } else {
-        Some(tokens.join(" AND "))
+        Some(phrases.join(" AND "))
     }
+}
+
+fn quote_fts_phrase(phrase: &str) -> String {
+    format!("\"{}\"", phrase.replace('"', "\"\""))
 }
 
 fn bool_to_i64(value: bool) -> i64 {
@@ -529,12 +878,25 @@ fn indexed_file_from_row(row: &Row<'_>) -> rusqlite::Result<IndexedFileRow> {
         mtime: row.get(5)?,
         is_dir: row.get::<_, i64>(6)? != 0,
         state_code: row.get(7)?,
+        file_type: row.get(8)?,
+        purpose: row.get(9)?,
+        lifecycle: row.get(10)?,
+        context: row.get(11)?,
+        risk_level: row.get(12)?,
+        suggested_action: row.get(13)?,
+        suggested_target_path: row.get(14)?,
+        suggested_name: row.get(15)?,
+        confidence: row.get(16)?,
+        classification_reason: row.get(17)?,
+        matched_rules: row.get(18)?,
+        requires_confirmation: row.get::<_, i64>(19)? != 0,
     })
 }
 
 fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
     let modified_at = unix_seconds_to_iso(row.mtime);
-    let file_type = infer_file_type(&row.extension, row.is_dir).to_string();
+    let file_type = normalized_file_type(&row);
+    let matched_rules = serde_json::from_str::<Vec<String>>(&row.matched_rules).unwrap_or_default();
 
     FileRecordDto {
         id: row.id,
@@ -544,10 +906,10 @@ fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
         extension: row.extension,
         size: row.size,
         file_type,
-        purpose: "Unknown".to_string(),
-        lifecycle: "Inbox".to_string(),
-        context: String::new(),
-        risk_level: "Normal".to_string(),
+        purpose: row.purpose,
+        lifecycle: row.lifecycle,
+        context: row.context,
+        risk_level: row.risk_level,
         hash: None,
         created_at: modified_at.clone(),
         modified_at,
@@ -556,13 +918,17 @@ fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
         is_hidden: row.name.starts_with('.'),
         is_deleted: false,
         is_duplicate: false,
-        suggested_action: "Keep".to_string(),
-        suggested_target_path: String::new(),
-        suggested_name: row.name,
-        confidence: 0.5,
-        classification_reason: "Indexed by Zen Canvas Tauri backend.".to_string(),
-        matched_rules: Vec::new(),
-        requires_confirmation: false,
+        suggested_action: row.suggested_action,
+        suggested_target_path: row.suggested_target_path,
+        suggested_name: if row.suggested_name.is_empty() {
+            row.name
+        } else {
+            row.suggested_name
+        },
+        confidence: row.confidence,
+        classification_reason: row.classification_reason,
+        matched_rules,
+        requires_confirmation: row.requires_confirmation,
         last_opened_at: None,
         open_count: 0,
         indexed_at: now.to_string(),
@@ -570,6 +936,810 @@ fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
         is_stale: false,
         state_code: row.state_code,
     }
+}
+
+#[derive(Debug, Clone)]
+struct RuleCandidate {
+    rule: Rule,
+    score: f64,
+}
+
+#[derive(Debug, Clone)]
+struct BuiltinClassification {
+    action: RuleAction,
+    confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ClassificationUpdate {
+    file_type: String,
+    purpose: String,
+    lifecycle: String,
+    context: String,
+    risk_level: String,
+    suggested_action: String,
+    suggested_target_path: String,
+    suggested_name: String,
+    confidence: f64,
+    classification_reason: String,
+    matched_rules: String,
+    requires_confirmation: bool,
+}
+
+fn classify_indexed_file(
+    row: &IndexedFileRow,
+    user_rules: &[Rule],
+) -> Result<ClassificationUpdate, DbError> {
+    let file_type = normalized_file_type(row);
+    let builtin = classify_builtin(row, &file_type);
+    let rules = built_in_rules()
+        .into_iter()
+        .chain(user_rules.iter().filter(|rule| rule.enabled).cloned())
+        .collect::<Vec<_>>();
+    let mut candidates = rules
+        .into_iter()
+        .filter_map(|rule| {
+            let matches = evaluate_rule(&rule, row, &file_type);
+            matches.then(|| RuleCandidate {
+                score: rule.weight + rule.priority * 0.1,
+                rule,
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                right
+                    .rule
+                    .priority
+                    .partial_cmp(&left.rule.priority)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let top = candidates.first();
+    let runner_up = candidates.get(1);
+    let has_conflict = top
+        .zip(runner_up)
+        .map(|(top, runner_up)| top.score - runner_up.score <= 10.0)
+        .unwrap_or(false);
+    let action = top
+        .map(|candidate| merge_action(&builtin.action, &candidate.rule.action))
+        .unwrap_or_else(|| builtin.action.clone());
+    let matched_rule_names = candidates
+        .iter()
+        .map(|candidate| candidate.rule.name.clone())
+        .collect::<Vec<_>>();
+    let confidence = top
+        .map(|candidate| (candidate.score / 100.0).clamp(0.35, 0.98))
+        .unwrap_or(builtin.confidence);
+    let risk_level = action
+        .risk_level
+        .clone()
+        .unwrap_or_else(|| default_if_empty(&row.risk_level, "Unknown"));
+    let suggested_action = safe_action(
+        &action
+            .suggested_action
+            .clone()
+            .unwrap_or_else(|| default_if_empty(&row.suggested_action, "Keep")),
+        &risk_level,
+    );
+    let suggested_target_path =
+        build_target_path(row, &file_type, action.target_template.as_deref());
+    let suggested_name = build_suggested_name(row, action.rename_template.as_deref());
+    let requires_confirmation = risk_level == "Sensitive"
+        || has_conflict
+        || confidence < 0.65
+        || suggested_action == "Review"
+        || suggested_action == "DeleteCandidate";
+
+    Ok(ClassificationUpdate {
+        file_type,
+        purpose: action
+            .purpose
+            .clone()
+            .unwrap_or_else(|| default_if_empty(&row.purpose, "Unknown")),
+        lifecycle: action
+            .lifecycle
+            .clone()
+            .unwrap_or_else(|| default_if_empty(&row.lifecycle, "Inbox")),
+        context: action
+            .context
+            .clone()
+            .unwrap_or_else(|| row.context.clone()),
+        risk_level: risk_level.clone(),
+        suggested_action,
+        suggested_target_path,
+        suggested_name,
+        confidence,
+        classification_reason: build_classification_reason(
+            &matched_rule_names,
+            has_conflict,
+            &risk_level,
+        ),
+        matched_rules: serde_json::to_string(&matched_rule_names)?,
+        requires_confirmation,
+    })
+}
+
+fn built_in_rules() -> Vec<Rule> {
+    vec![
+        system_rule(
+            "system_identity",
+            "Sensitive identity documents",
+            100.0,
+            95.0,
+            "OR",
+            vec![
+                condition("name", "contains", "passport"),
+                condition("name", "contains", "visa"),
+                condition("name", "contains", "身份证"),
+                condition("name", "contains", "护照"),
+                condition("path", "contains", "identity"),
+            ],
+            RuleAction {
+                purpose: Some("Identity".to_string()),
+                lifecycle: Some("Sensitive".to_string()),
+                risk_level: Some("Sensitive".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("20_Areas/Personal/Identity".to_string()),
+                context: Some("Identity".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+        system_rule(
+            "system_career",
+            "Career and resume files",
+            90.0,
+            84.0,
+            "OR",
+            vec![
+                condition("name", "contains", "resume"),
+                condition("name", "contains", "cv"),
+                condition("name", "contains", "cover letter"),
+                condition("path", "contains", "career"),
+            ],
+            RuleAction {
+                purpose: Some("Career".to_string()),
+                lifecycle: Some("Reference".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Move".to_string()),
+                target_template: Some("20_Areas/Career".to_string()),
+                context: Some("Career".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+        system_rule(
+            "system_finance",
+            "Finance and receipt files",
+            80.0,
+            80.0,
+            "OR",
+            vec![
+                condition("name", "contains", "invoice"),
+                condition("name", "contains", "receipt"),
+                condition("name", "contains", "tax"),
+                condition("path", "contains", "bank"),
+            ],
+            RuleAction {
+                purpose: Some("Finance".to_string()),
+                lifecycle: Some("Reference".to_string()),
+                risk_level: Some("Sensitive".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("20_Areas/Finance".to_string()),
+                context: Some("Finance".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+        system_rule(
+            "system_study",
+            "Study material and coursework",
+            70.0,
+            70.0,
+            "OR",
+            vec![
+                condition("name", "contains", "assignment"),
+                condition("name", "contains", "lecture"),
+                condition("name", "contains", "paper"),
+                condition("name", "contains", "comp"),
+            ],
+            RuleAction {
+                purpose: Some("Study".to_string()),
+                lifecycle: Some("Active".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Move".to_string()),
+                target_template: Some("20_Areas/Study".to_string()),
+                context: Some("Study".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+        system_rule(
+            "system_installer",
+            "Installers and setup packages",
+            60.0,
+            68.0,
+            "OR",
+            vec![
+                condition("file_type", "equals", "Installer"),
+                condition("name", "contains", "setup"),
+                condition("name", "contains", "installer"),
+            ],
+            RuleAction {
+                purpose: Some("Installer".to_string()),
+                lifecycle: Some("Disposable".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("90_Temporary/Installers".to_string()),
+                context: Some("Installer".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+        system_rule(
+            "system_project_folder",
+            "Project folder boundary",
+            55.0,
+            86.0,
+            "OR",
+            vec![condition("extension", "equals", "folder")],
+            RuleAction {
+                purpose: Some("Project".to_string()),
+                lifecycle: Some("Active".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("20_Areas/Projects".to_string()),
+                context: Some("Project Folder".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+        system_rule(
+            "system_inbox_downloads",
+            "Downloads and desktop inbox",
+            50.0,
+            62.0,
+            "OR",
+            vec![
+                condition("directory", "contains", "downloads"),
+                condition("directory", "contains", "desktop"),
+            ],
+            RuleAction {
+                purpose: Some("Temporary".to_string()),
+                lifecycle: Some("Inbox".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Move".to_string()),
+                target_template: Some("00_Inbox".to_string()),
+                context: Some("Inbox".to_string()),
+                ..RuleAction::default()
+            },
+        ),
+    ]
+}
+
+fn classify_builtin(row: &IndexedFileRow, file_type: &str) -> BuiltinClassification {
+    let haystack = format!("{} {}", row.name, row.path).to_lowercase();
+    let age_days = days_since_unix(row.mtime);
+
+    if row.is_dir {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some("Project".to_string()),
+                lifecycle: Some("Active".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("20_Areas/Projects".to_string()),
+                context: Some("Project Folder".to_string()),
+                ..RuleAction::default()
+            },
+            confidence: 0.86,
+        };
+    }
+
+    if any_contains(
+        &haystack,
+        &[
+            "passport",
+            "visa",
+            "id",
+            "identity",
+            "private",
+            "身份证",
+            "护照",
+            "银行卡",
+        ],
+    ) {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some("Identity".to_string()),
+                lifecycle: Some("Sensitive".to_string()),
+                risk_level: Some("Sensitive".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("20_Areas/Personal/Identity".to_string()),
+                context: Some("Identity".to_string()),
+                ..RuleAction::default()
+            },
+            confidence: 0.92,
+        };
+    }
+
+    if any_contains(
+        &haystack,
+        &["resume", "cv", "cover letter", "portfolio", "interview"],
+    ) {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some("Career".to_string()),
+                lifecycle: Some("Reference".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Move".to_string()),
+                target_template: Some("20_Areas/Career".to_string()),
+                context: Some("Career".to_string()),
+                ..RuleAction::default()
+            },
+            confidence: 0.84,
+        };
+    }
+
+    if any_contains(
+        &haystack,
+        &[
+            "invoice", "receipt", "bill", "tax", "payment", "bank", "paypal",
+        ],
+    ) {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some("Finance".to_string()),
+                lifecycle: Some("Reference".to_string()),
+                risk_level: Some("Sensitive".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("20_Areas/Finance".to_string()),
+                context: Some("Finance".to_string()),
+                ..RuleAction::default()
+            },
+            confidence: 0.78,
+        };
+    }
+
+    if any_contains(
+        &haystack,
+        &[
+            "course",
+            "lecture",
+            "assignment",
+            "report",
+            "paper",
+            "comp",
+            "math",
+            "cs",
+        ],
+    ) {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some("Study".to_string()),
+                lifecycle: Some(if age_days <= 30 { "Active" } else { "Archive" }.to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Move".to_string()),
+                target_template: Some(
+                    if age_days <= 30 {
+                        "20_Areas/Study"
+                    } else {
+                        "40_Archive/{year}/Study"
+                    }
+                    .to_string(),
+                ),
+                context: Some(extract_study_context(&row.name)),
+                ..RuleAction::default()
+            },
+            confidence: 0.72,
+        };
+    }
+
+    if file_type == "Installer" {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some("Installer".to_string()),
+                lifecycle: Some("Disposable".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Review".to_string()),
+                target_template: Some("90_Temporary/Installers".to_string()),
+                context: Some("Installer".to_string()),
+                ..RuleAction::default()
+            },
+            confidence: 0.68,
+        };
+    }
+
+    if any_contains(
+        &haystack,
+        &["temp", "tmp", "copy", "副本", "screenshot", "screen shot"],
+    ) || is_inbox_directory(&parent_directory(&row.path))
+    {
+        return BuiltinClassification {
+            action: RuleAction {
+                purpose: Some(
+                    if file_type == "Image" {
+                        "Media"
+                    } else {
+                        "Temporary"
+                    }
+                    .to_string(),
+                ),
+                lifecycle: Some("Inbox".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some(
+                    if file_type == "Image" {
+                        "Rename"
+                    } else {
+                        "Move"
+                    }
+                    .to_string(),
+                ),
+                target_template: Some("00_Inbox".to_string()),
+                rename_template: (file_type == "Image").then(|| "{basename}_{date}".to_string()),
+                context: Some("Inbox".to_string()),
+            },
+            confidence: 0.62,
+        };
+    }
+
+    BuiltinClassification {
+        action: RuleAction {
+            purpose: Some("Unknown".to_string()),
+            lifecycle: Some(
+                if age_days <= 14 {
+                    "Active"
+                } else {
+                    "Reference"
+                }
+                .to_string(),
+            ),
+            risk_level: Some("Unknown".to_string()),
+            suggested_action: Some("Keep".to_string()),
+            target_template: Some(String::new()),
+            context: Some(String::new()),
+            ..RuleAction::default()
+        },
+        confidence: 0.45,
+    }
+}
+
+fn evaluate_rule(rule: &Rule, row: &IndexedFileRow, file_type: &str) -> bool {
+    if !rule.enabled || rule.groups.is_empty() {
+        return false;
+    }
+    let results = rule
+        .groups
+        .iter()
+        .map(|group| evaluate_group(group, row, file_type))
+        .collect::<Vec<_>>();
+    if rule.root_operator.eq_ignore_ascii_case("AND") {
+        results.iter().all(|value| *value)
+    } else {
+        results.iter().any(|value| *value)
+    }
+}
+
+fn evaluate_group(group: &RuleConditionGroup, row: &IndexedFileRow, file_type: &str) -> bool {
+    if group.conditions.is_empty() {
+        return false;
+    }
+    let results = group
+        .conditions
+        .iter()
+        .map(|condition| evaluate_condition(condition, row, file_type))
+        .collect::<Vec<_>>();
+    if group.operator.eq_ignore_ascii_case("OR") {
+        results.iter().any(|value| *value)
+    } else {
+        results.iter().all(|value| *value)
+    }
+}
+
+fn evaluate_condition(condition: &RuleCondition, row: &IndexedFileRow, file_type: &str) -> bool {
+    let raw = condition_value(&condition.field, row, file_type).to_lowercase();
+    let expected = json_value_to_string(&condition.value).to_lowercase();
+    match condition.operator.as_str() {
+        "contains" => raw.contains(&expected),
+        "equals" | "is" => raw == expected,
+        "startsWith" => raw.starts_with(&expected),
+        "endsWith" => raw.ends_with(&expected),
+        "greaterThan" => raw.parse::<f64>().unwrap_or(0.0) > json_value_to_f64(&condition.value),
+        "lessThan" => raw.parse::<f64>().unwrap_or(0.0) < json_value_to_f64(&condition.value),
+        "olderThanDays" => days_since_unix(row.mtime) > json_value_to_i64(&condition.value),
+        "newerThanDays" => days_since_unix(row.mtime) < json_value_to_i64(&condition.value),
+        _ => false,
+    }
+}
+
+fn condition_value(field: &str, row: &IndexedFileRow, file_type: &str) -> String {
+    match field {
+        "name" => row.name.clone(),
+        "extension" => {
+            if row.is_dir {
+                "folder".to_string()
+            } else {
+                row.extension.clone()
+            }
+        }
+        "file_type" => file_type.to_string(),
+        "path" => row.path.clone(),
+        "directory" => parent_directory(&row.path),
+        "size" => row.size.to_string(),
+        "modified_at" => unix_seconds_to_iso(row.mtime),
+        "is_duplicate" => "false".to_string(),
+        "risk_level" => row.risk_level.clone(),
+        _ => String::new(),
+    }
+}
+
+fn merge_action(base: &RuleAction, override_action: &RuleAction) -> RuleAction {
+    RuleAction {
+        purpose: override_action
+            .purpose
+            .clone()
+            .or_else(|| base.purpose.clone()),
+        lifecycle: override_action
+            .lifecycle
+            .clone()
+            .or_else(|| base.lifecycle.clone()),
+        context: override_action
+            .context
+            .clone()
+            .or_else(|| base.context.clone()),
+        risk_level: override_action
+            .risk_level
+            .clone()
+            .or_else(|| base.risk_level.clone()),
+        suggested_action: override_action
+            .suggested_action
+            .clone()
+            .or_else(|| base.suggested_action.clone()),
+        target_template: override_action
+            .target_template
+            .clone()
+            .or_else(|| base.target_template.clone()),
+        rename_template: override_action
+            .rename_template
+            .clone()
+            .or_else(|| base.rename_template.clone()),
+    }
+}
+
+fn build_classification_reason(
+    matched_rules: &[String],
+    has_conflict: bool,
+    risk_level: &str,
+) -> String {
+    let mut parts = if matched_rules.is_empty() {
+        vec!["No strong rule matched".to_string()]
+    } else {
+        vec![format!(
+            "Matched {}",
+            matched_rules
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )]
+    };
+    if has_conflict {
+        parts.push("similar rule scores require review".to_string());
+    }
+    if risk_level == "Sensitive" {
+        parts.push("sensitive files require manual confirmation".to_string());
+    }
+    parts.join("; ")
+}
+
+fn build_target_path(row: &IndexedFileRow, file_type: &str, template: Option<&str>) -> String {
+    let Some(template) = template.filter(|value| !value.is_empty()) else {
+        return String::new();
+    };
+    let year = unix_seconds_to_iso(row.mtime)
+        .get(0..4)
+        .unwrap_or("1970")
+        .to_string();
+    let resolved = template
+        .replace("{year}", &year)
+        .replace("{type}", file_type);
+    let mut target = PathBuf::from(parent_directory(&row.path));
+    target.push("ZenCanvas");
+    for segment in resolved
+        .split(['/', '\\'])
+        .filter(|segment| !segment.is_empty())
+    {
+        target.push(segment);
+    }
+    target.to_string_lossy().to_string()
+}
+
+fn build_suggested_name(row: &IndexedFileRow, template: Option<&str>) -> String {
+    let Some(template) = template.filter(|value| !value.is_empty()) else {
+        return row.name.clone();
+    };
+    let basename = clean_name(file_stem(&row.name, &row.extension));
+    let date = unix_seconds_to_iso(row.mtime)
+        .get(0..10)
+        .unwrap_or("1970-01-01")
+        .replace('-', "");
+    let extension = row.extension.trim_start_matches('.');
+    let suffix = if extension.is_empty() {
+        String::new()
+    } else {
+        format!(".{extension}")
+    };
+    format!(
+        "{}{}",
+        template
+            .replace("{basename}", &basename)
+            .replace("{date}", &date)
+            .replace("{extension}", extension),
+        suffix
+    )
+}
+
+fn file_stem<'a>(name: &'a str, extension: &str) -> &'a str {
+    let extension = extension.trim_start_matches('.');
+    if extension.is_empty() {
+        return name;
+    }
+    let suffix = format!(".{extension}");
+    if name.to_lowercase().ends_with(&suffix.to_lowercase()) && name.len() > suffix.len() {
+        &name[..name.len() - suffix.len()]
+    } else {
+        name
+    }
+}
+
+fn clean_name(value: &str) -> String {
+    let mut output = String::new();
+    let mut last_was_separator = false;
+    for character in value.trim().chars() {
+        if character.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&character) {
+            output.extend(character.to_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            output.push('_');
+            last_was_separator = true;
+        }
+    }
+    output.trim_matches('_').to_string()
+}
+
+fn safe_action(action: &str, risk_level: &str) -> String {
+    if risk_level == "Sensitive" && action != "Keep" {
+        "Review".to_string()
+    } else if action == "DeleteCandidate" {
+        "Review".to_string()
+    } else {
+        action.to_string()
+    }
+}
+
+fn normalized_file_type(row: &IndexedFileRow) -> String {
+    if row.file_type.is_empty() || row.file_type == "Other" {
+        infer_file_type(&row.extension, row.is_dir).to_string()
+    } else {
+        row.file_type.clone()
+    }
+}
+
+fn default_if_empty(value: &str, fallback: &str) -> String {
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn any_contains(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn is_inbox_directory(directory: &str) -> bool {
+    let normalized = directory.to_lowercase();
+    normalized.contains("downloads") || normalized.contains("desktop")
+}
+
+fn extract_study_context(name: &str) -> String {
+    name.split(|character: char| !character.is_ascii_alphanumeric())
+        .find(|part| {
+            let has_letters = part
+                .chars()
+                .any(|character| character.is_ascii_alphabetic());
+            let has_digits = part.chars().any(|character| character.is_ascii_digit());
+            (4..=10).contains(&part.len()) && has_letters && has_digits
+        })
+        .map(|part| part.to_ascii_uppercase())
+        .unwrap_or_else(|| "Study".to_string())
+}
+
+fn days_since_unix(mtime: i64) -> i64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(mtime);
+    ((now - mtime).max(0)) / 86_400
+}
+
+fn json_value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn json_value_to_f64(value: &Value) -> f64 {
+    match value {
+        Value::Number(value) => value.as_f64().unwrap_or(0.0),
+        Value::String(value) => value.parse().unwrap_or(0.0),
+        Value::Bool(value) => {
+            if *value {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn json_value_to_i64(value: &Value) -> i64 {
+    json_value_to_f64(value) as i64
+}
+
+fn system_rule(
+    id: &str,
+    name: &str,
+    priority: f64,
+    weight: f64,
+    group_operator: &str,
+    conditions: Vec<RuleCondition>,
+    action: RuleAction,
+) -> Rule {
+    Rule {
+        id: id.to_string(),
+        name: name.to_string(),
+        source: "system".to_string(),
+        enabled: true,
+        priority,
+        weight,
+        root_operator: "OR".to_string(),
+        groups: vec![RuleConditionGroup {
+            id: format!("{id}_group"),
+            operator: group_operator.to_string(),
+            conditions,
+        }],
+        action,
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+fn condition(field: &str, operator: &str, value: &str) -> RuleCondition {
+    RuleCondition {
+        id: format!("{field}_{operator}_{value}"),
+        field: field.to_string(),
+        operator: operator.to_string(),
+        value: Value::String(value.to_string()),
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_or() -> String {
+    "OR".to_string()
+}
+
+fn default_and() -> String {
+    "AND".to_string()
 }
 
 fn parent_directory(path: &str) -> String {
@@ -652,6 +1822,158 @@ mod tests {
         assert_eq!(stats.by_type.get("Document"), Some(&1));
         assert_eq!(stats.by_type.get("Image"), Some(&1));
         assert_eq!(stats.by_lifecycle.get("Inbox"), Some(&2));
+    }
+
+    #[test]
+    fn execute_rules_updates_inbox_resume_classification() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file(
+            &db,
+            "file-resume",
+            "resume_2026.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+
+        let summary = db
+            .execute_rules_on_inbox(Vec::new())
+            .expect("execute rules");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        let file = page
+            .files
+            .iter()
+            .find(|file| file.id == "file-resume")
+            .expect("classified file");
+
+        assert_eq!(summary.scanned, 1);
+        assert_eq!(summary.updated, 1);
+        assert_eq!(file.purpose, "Career");
+        assert_eq!(file.lifecycle, "Reference");
+        assert_eq!(file.suggested_action, "Move");
+        assert!(file.confidence >= 0.8);
+        assert!(file
+            .matched_rules
+            .iter()
+            .any(|rule| rule.contains("Career")));
+        assert_ne!(
+            file.classification_reason,
+            "Indexed by Zen Canvas Tauri backend."
+        );
+    }
+
+    #[test]
+    fn execute_rules_marks_finance_files_sensitive_review_only() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file(
+            &db,
+            "file-invoice",
+            "invoice_apple.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+
+        let summary = db
+            .execute_rules_on_inbox(Vec::new())
+            .expect("execute rules");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        let file = page
+            .files
+            .iter()
+            .find(|file| file.id == "file-invoice")
+            .expect("classified file");
+
+        assert_eq!(summary.needs_confirmation, 1);
+        assert_eq!(file.purpose, "Finance");
+        assert_eq!(file.risk_level, "Sensitive");
+        assert_eq!(file.suggested_action, "Review");
+        assert!(file.requires_confirmation);
+    }
+
+    #[test]
+    fn execute_rules_accepts_user_rules_that_override_builtins() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file(
+            &db,
+            "file-resume-project",
+            "resume_2026.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+
+        let user_rule = Rule {
+            id: "user_resume_project".to_string(),
+            name: "Resume project override".to_string(),
+            source: "user".to_string(),
+            enabled: true,
+            priority: 150.0,
+            weight: 96.0,
+            root_operator: "OR".to_string(),
+            groups: vec![RuleConditionGroup {
+                id: "resume_project_group".to_string(),
+                operator: "AND".to_string(),
+                conditions: vec![RuleCondition {
+                    id: "resume_name".to_string(),
+                    field: "name".to_string(),
+                    operator: "contains".to_string(),
+                    value: Value::String("resume".to_string()),
+                }],
+            }],
+            action: RuleAction {
+                purpose: Some("Project".to_string()),
+                lifecycle: Some("Active".to_string()),
+                context: Some("Override".to_string()),
+                risk_level: Some("Normal".to_string()),
+                suggested_action: Some("Move".to_string()),
+                target_template: Some("20_Areas/Projects".to_string()),
+                rename_template: None,
+            },
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        db.execute_rules_on_inbox(vec![user_rule])
+            .expect("execute rules");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        let file = page
+            .files
+            .iter()
+            .find(|file| file.id == "file-resume-project")
+            .expect("classified file");
+
+        assert_eq!(file.purpose, "Project");
+        assert_eq!(file.lifecycle, "Active");
+        assert!(file
+            .matched_rules
+            .iter()
+            .any(|rule| rule == "Resume project override"));
+    }
+
+    #[test]
+    fn search_files_matches_chinese_substrings_with_trigram() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file(
+            &db,
+            "file-cn",
+            "项目报告2026_final.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+
+        let results = db.search_files("报告2026", Some(10)).expect("search");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "项目报告2026_final.pdf");
+    }
+
+    #[test]
+    fn build_fts_query_quotes_terms_without_breaking_chinese_or_punctuation() {
+        let query = build_fts_query("项目\"报告 final-v1.pdf").expect("query");
+
+        assert_eq!(query, "\"项目\"\"报告\" AND \"final-v1.pdf\"");
     }
 
     fn insert_test_file(

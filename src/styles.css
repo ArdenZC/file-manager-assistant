@@ -6203,6 +6203,93 @@ html.search-window-root .command-backdrop.standalone {
   scrollbar-width: thin;
 }
 
+.virtual-list {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  contain: strict;
+}
+
+.hub-inbox-list.virtual-list,
+.bucket-dropzone.virtual-list,
+.rule-list.virtual-list,
+.preview-folder-files.compact.virtual-list {
+  display: block;
+}
+
+.virtual-list-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hub-inbox-list .virtual-row {
+  padding-bottom: 12px;
+}
+
+.bucket-dropzone .virtual-row,
+.rule-list .virtual-row {
+  padding-bottom: 10px;
+}
+
+.file-card {
+  width: 100%;
+  border: 1px solid var(--line-dark);
+  color: var(--ink);
+  text-align: left;
+}
+
+.file-card em {
+  min-width: 64px;
+  justify-self: end;
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.46);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+  text-align: center;
+}
+
+.dark .file-card em {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.vault-grid-virtual {
+  height: min(720px, calc(100vh - 330px));
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  contain: strict;
+}
+
+.vault-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: grid;
+  gap: 16px;
+  box-sizing: border-box;
+  padding-bottom: 16px;
+}
+
+.vault-grid-virtual .asset-card {
+  min-height: 210px;
+}
+
+.rules-virtual-list {
+  max-height: min(560px, calc(100vh - 260px));
+}
+
 .preview-folder-card {
   max-height: min(620px, calc(100vh - 230px));
   overflow: hidden;

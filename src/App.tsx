@@ -274,6 +274,18 @@ export function App() {
     setRules((current) => [...current, rule]);
   }
 
+  async function runDispatch() {
+    try {
+      const summary = await tauriApi.executeRulesOnInbox(rules);
+      await Promise.all([loadStats(), loadFirstPage()]);
+      setStatus(`${t("success")}: ${summary.updated.toLocaleString()} / ${summary.scanned.toLocaleString()}`);
+      return summary;
+    } catch (error) {
+      setStatus(readableError(error));
+      throw error;
+    }
+  }
+
   async function executeSelected() {
     const operations = displayPreviews.filter((preview) =>
       selectedOperationIds.has(preview.id) && preview.is_executable !== false
@@ -461,7 +473,9 @@ export function App() {
                 t={t}
               />
             )}
-            {view === "organize" && <HubView files={files} setView={setView} t={t} />}
+            {view === "organize" && (
+              <HubView files={files} rules={rules} onRunDispatch={runDispatch} setView={setView} t={t} />
+            )}
             {view === "library" && (
               <VaultView
                 page={libraryPage}
