@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRestorePreview, restoreBatch } from "../src/core/restoreExecutor";
 import type { OperationLog } from "../src/types/domain";
 
@@ -12,6 +12,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -39,6 +40,20 @@ describe("restore executor", () => {
     const preview = await createRestorePreview([makeLog(before, after)]);
     expect(preview.items[0].can_restore).toBe(false);
     expect(preview.items[0].blocking_reason).toContain("already exists");
+  });
+
+  it("restores with copy and unlink when rename reports a cross-device move", async () => {
+    const before = path.join(tempDir, "source.txt");
+    const after = path.join(tempDir, "renamed.txt");
+    await fs.writeFile(after, "restore-cross-device");
+    const exdev = Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(exdev);
+
+    const result = await restoreBatch([makeLog(before, after)]);
+
+    expect(result.restored).toBe(1);
+    await expect(fs.readFile(before, "utf8")).resolves.toBe("restore-cross-device");
+    await expect(fs.stat(after)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

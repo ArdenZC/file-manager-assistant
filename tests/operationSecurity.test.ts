@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeOperations } from "../src/core/operationExecutor";
 import { isSafeFileName, validateOperationPreview } from "../src/core/operationGuards";
 import type { FileRecord, OperationPreview } from "../src/types/domain";
@@ -13,6 +13,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -98,6 +99,24 @@ describe("operation execution safety", () => {
     await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(target, "utf8")).resolves.toBe("existing");
     await expect(fs.readFile(suffixedTarget, "utf8")).resolves.toBe("source");
+  });
+
+  it("falls back to copy and unlink when rename reports a cross-device move", async () => {
+    const source = path.join(tempDir, "source.txt");
+    const target = path.join(tempDir, "moved.txt");
+    await fs.writeFile(source, "cross-device");
+    const exdev = Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(exdev);
+
+    const file = makeFile(source, { suggested_action: "Move", suggested_target_path: tempDir, suggested_name: "moved.txt" });
+    const operation = makeOperation(file, target, "moved.txt", "move");
+
+    const result = await executeOperations([file], [operation]);
+
+    expect(result.logs[0].status).toBe("success");
+    expect(result.updatedFiles[0].path).toBe(target);
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("cross-device");
+    await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects protected system target folders", () => {

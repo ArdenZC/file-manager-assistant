@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { OperationLog, RestoreBatchResult, RestorePreview, RestorePreviewItem } from "../types/domain.js";
+import { mapWithConcurrency } from "./concurrency.js";
+import { safeMoveFile } from "./fileMoves.js";
 
 export async function createRestorePreview(logs: OperationLog[]): Promise<RestorePreview> {
   const batchId = logs[0]?.batch_id ?? "";
-  const items = await Promise.all(logs.map(toPreviewItem));
+  const items = await mapWithConcurrency(logs, 16, toPreviewItem);
   return { batch_id: batchId, items };
 }
 
@@ -23,8 +24,7 @@ export async function restoreBatch(logs: OperationLog[]): Promise<RestoreBatchRe
     }
 
     try {
-      await fs.mkdir(path.dirname(item.restore_path), { recursive: true });
-      await fs.rename(item.current_path, item.restore_path);
+      await safeMoveFile(item.current_path, item.restore_path);
       restored += 1;
       items.push({ ...item, can_restore: false, blocking_reason: "Restored" });
     } catch (error) {

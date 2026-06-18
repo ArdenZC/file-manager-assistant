@@ -6225,3 +6225,10 @@ html.search-window-root .command-backdrop.standalone {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.preview-load-more {
+  justify-self: center;
+  min-height: 34px;
+  padding-inline: 14px;
+  font-size: 12px;
+}

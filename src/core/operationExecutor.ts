@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExecuteOperationResult, FileRecord, OperationLog, OperationPreview } from "../types/domain.js";
+import { safeMoveFile } from "./fileMoves.js";
 import { nowIso, randomId } from "./id.js";
 import { validateOperationPreview } from "./operationGuards.js";
 
@@ -35,8 +36,7 @@ export async function executeOperations(
         continue;
       }
       const actualOperation = withActualTarget(operation, targetPath);
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.rename(operation.source_path, targetPath);
+      await safeMoveFile(operation.source_path, targetPath);
       const nextFile = {
         ...file,
         path: targetPath,

@@ -1186,6 +1186,12 @@ function TimelineView({
   const groups = groupOperationPreviews(previews, t);
   const executableCount = previews.filter((preview) => preview.is_executable !== false).length;
   const blockedCount = previews.length - executableCount;
+  const previewPageSize = 30;
+  const [previewVisibleLimits, setPreviewVisibleLimits] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    setPreviewVisibleLimits({});
+  }, [previews.length]);
 
   return (
     <div className="timeline-layout page-enter">
@@ -1247,7 +1253,7 @@ function TimelineView({
                           <em>{subgroup.items.length}</em>
                         </div>
                         <div className="preview-folder-files compact">
-                          {subgroup.items.map((preview) => (
+                          {subgroup.items.slice(0, previewVisibleLimits[`${group.key}:${subgroup.key}`] ?? previewPageSize).map((preview) => (
                             <div className="preview-file-row" key={preview.id}>
                               <input
                                 type="checkbox"
@@ -1271,6 +1277,28 @@ function TimelineView({
                               </div>
                             </div>
                           ))}
+                          {subgroup.items.length > (previewVisibleLimits[`${group.key}:${subgroup.key}`] ?? previewPageSize) && (
+                            <button
+                              className="glass-button preview-load-more"
+                              onClick={() => {
+                                const key = `${group.key}:${subgroup.key}`;
+                                const current = previewVisibleLimits[key] ?? previewPageSize;
+                                setPreviewVisibleLimits((limits) => ({
+                                  ...limits,
+                                  [key]: current + previewPageSize
+                                }));
+                              }}
+                            >
+                              <Plus size={15} />
+                              {t("showMorePreviewItems").replace(
+                                "{count}",
+                                String(Math.min(
+                                  previewPageSize,
+                                  subgroup.items.length - (previewVisibleLimits[`${group.key}:${subgroup.key}`] ?? previewPageSize)
+                                ))
+                              )}
+                            </button>
+                          )}
                         </div>
                       </section>
                     ))}

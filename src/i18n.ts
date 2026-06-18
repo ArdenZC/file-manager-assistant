@@ -216,7 +216,8 @@ const zh = {
   diskUsageInScope: "已扫描 {size}，所在磁盘容量 {disk}",
   previewMainFolders: "主文件夹",
   executableItems: "可执行项",
-  blockedItems: "需确认项"
+  blockedItems: "需确认项",
+  showMorePreviewItems: "再显示 {count} 个"
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
@@ -435,7 +436,8 @@ const en: Record<keyof typeof zh, string> = {
   diskUsageInScope: "Scanned {size} across {disk} of disk capacity",
   previewMainFolders: "Main folders",
   executableItems: "Executable",
-  blockedItems: "Needs review"
+  blockedItems: "Needs review",
+  showMorePreviewItems: "Show {count} more"
 };
 
 const dict = { zh, en } as const;

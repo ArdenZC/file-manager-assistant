@@ -4,6 +4,7 @@ import { createReadStream, type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { FileRecord, ScanProgress, ScanResult, ScanRoot } from "../types/domain.js";
+import { mapWithConcurrency } from "./concurrency.js";
 import { getExtension, getFileType } from "./fileTypes.js";
 import { nowIso, stableId } from "./id.js";
 
@@ -438,11 +439,10 @@ async function fillDuplicateHashes(files: FileRecord[], signal?: AbortSignal) {
   for (const bucket of bySize.values()) {
     throwIfAborted(signal);
     if (bucket.length < 2) continue;
-    await Promise.all(
-      bucket.map(async (file) => {
-        file.hash = await hashFile(file.path);
-      })
-    );
+    await mapWithConcurrency(bucket, 8, async (file) => {
+      throwIfAborted(signal);
+      file.hash = await hashFile(file.path);
+    });
   }
 }
 
