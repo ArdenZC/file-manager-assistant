@@ -3,6 +3,7 @@ dist/
 dist-electron/
 coverage/
 dist-packages/
+src-tauri/target/
 .tmp-tests/
 *.log
 *.sqlite

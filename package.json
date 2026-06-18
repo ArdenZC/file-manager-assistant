@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.3",
+    "@tauri-apps/api": "^2.11.1",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^5.0.0",
     "lucide-react": "^0.468.0",
