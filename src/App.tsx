@@ -5,6 +5,7 @@ import { makeTranslator } from "./i18n";
 import { useAppChrome } from "./hooks/useAppChrome";
 import { useDebounce } from "./hooks/useDebounce";
 import { useFileLibrary } from "./hooks/useFileLibrary";
+import { useFsWatcher } from "./hooks/useFsWatcher";
 import { useOperationQueue } from "./hooks/useOperationQueue";
 import { useScanManager } from "./hooks/useScanManager";
 import { useWindowBehavior } from "./hooks/useWindowBehavior";
@@ -39,6 +40,7 @@ export function App() {
     void tauriApi.initDatabase().catch(() => undefined);
     void refresh();
   }, [refresh]);
+  useFsWatcher({ onRefreshData: refresh, onError: showError });
 
   const appChrome = useAppChrome({ theme, setTheme, setLanguage });
   const {

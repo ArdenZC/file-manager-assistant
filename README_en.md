@@ -13,9 +13,11 @@
 </div>
 
 <div align="center">
-  <img src="https://img.shields.io/badge/Electron-3178C6?style=for-the-badge&logo=electron&logoColor=white" alt="Electron" />
-  <img src="https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
+  <img src="https://img.shields.io/badge/Tauri_2-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri 2" />
+  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/React_19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
   <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Vite_8-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite 8" />
   <img src="https://img.shields.io/badge/SQLite_FTS5-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite FTS5" />
 </div>
 
@@ -51,17 +53,18 @@
 - Sensitive files show advice and reasons, but are not selected for execution.
 - Conflicts, low-confidence items, and close rule scores enter manual confirmation by default.
 - The execution layer revalidates operation type, absolute paths, safe filenames, source-path consistency, protected system targets, and overwrite conflicts.
-- Electron uses `contextIsolation`, disables `nodeIntegration`, enables sandboxing, and blocks unexpected navigation, popups, and permission prompts.
+- The desktop layer uses Tauri 2 + Rust IPC. The frontend does not access the file system directly; scanning, indexing, moving, renaming, and restore operations are validated in Rust commands.
 
 ## Architecture
 
 ```text
 React 19 UI
-  -> Secure Preload IPC
-    -> Electron Main Process
-      -> SQLite WAL + FTS5
-      -> Chokidar stale-source watcher
-      -> guarded move / rename executor
+  -> Tauri 2 IPC commands / events
+    -> Rust backend
+      -> rusqlite + SQLite WAL + FTS5 trigram
+      -> r2d2 connection pool
+      -> notify watcher + jwalk scanner
+      -> guarded move / rename / restore executor
 ```
 
 ## Development
@@ -71,6 +74,7 @@ npm install
 npm run dev
 npm run typecheck
 npm test
+cd src-tauri && cargo test -p zen-canvas-tauri && cd ..
 npm run test:performance
 npm run build
 npm run security:audit
@@ -84,17 +88,11 @@ npm run verify
 
 ## Packaging
 
-Zen Canvas currently ships unsigned public builds for Windows and macOS. Signing hooks are reserved for later.
+Zen Canvas has moved to Tauri 2. The current packaging entrypoint is the Tauri build, which produces the desktop app and installer for the current platform. Signing hooks are reserved for later.
 
 ```bash
 npm run assets:brand
-npm run dist:win
-npm run dist:mac
+npm run build
 ```
 
-Release targets:
-
-- Windows: NSIS + zip, `x64` / `ia32` / `arm64`
-- macOS: dmg + zip, `x64` / `arm64`
-
-The `.github/workflows/release-build.yml` workflow builds release packages for `v*` tags and attaches them to GitHub Releases.
+Windows builds output the NSIS installer under `src-tauri/target/release/bundle/nsis/`. The cross-platform release matrix and signing flow will be refined alongside the Tauri release configuration.

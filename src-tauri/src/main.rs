@@ -32,6 +32,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             zen_canvas_tauri::db::init_db,
             zen_canvas_tauri::db::insert_file,
+            zen_canvas_tauri::db::remove_files_by_paths,
             zen_canvas_tauri::db::search_files,
             zen_canvas_tauri::db::get_paged_files,
             zen_canvas_tauri::db::get_stats_summary,

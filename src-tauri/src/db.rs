@@ -304,6 +304,44 @@ impl Database {
         Ok(())
     }
 
+    pub fn remove_files_by_paths(&self, paths: &[String]) -> Result<usize, DbError> {
+        if paths.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut removed = 0;
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                DELETE FROM files
+                WHERE path = ?1
+                   OR path LIKE ?2 ESCAPE '~'
+                   OR path LIKE ?3 ESCAPE '~'
+                "#,
+            )?;
+
+            for path in paths.iter().map(|path| path.trim()).filter(|path| !path.is_empty()) {
+                let path = trim_trailing_path_separators(path);
+                if path.is_empty() {
+                    continue;
+                }
+
+                let escaped_path = escape_like_pattern(path);
+                let slash_descendants = format!("{escaped_path}/%");
+                let backslash_descendants = format!("{escaped_path}\\%");
+                removed += stmt.execute(params![
+                    path,
+                    slash_descendants,
+                    backslash_descendants
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(removed)
+    }
+
     pub fn execute_rules_on_inbox(
         &self,
         rules: Vec<Rule>,
@@ -321,6 +359,7 @@ impl Database {
                        suggested_target_path, suggested_name, confidence, classification_reason,
                        matched_rules, requires_confirmation
                 FROM files
+                WHERE lifecycle = 'Inbox'
                 ORDER BY mtime DESC, name COLLATE NOCASE ASC
                 "#,
         )?;
@@ -620,6 +659,14 @@ pub fn insert_file(db: State<'_, Database>, file: InsertFileRequest) -> Result<(
 }
 
 #[tauri::command]
+pub fn remove_files_by_paths(
+    db: State<'_, Database>,
+    paths: Vec<String>,
+) -> Result<usize, String> {
+    db.remove_files_by_paths(&paths).map_err(command_error)
+}
+
+#[tauri::command]
 pub fn search_files(
     db: State<'_, Database>,
     query: String,
@@ -657,6 +704,12 @@ pub async fn execute_rules_on_inbox(
 }
 
 fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        "#,
+    )?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -832,6 +885,32 @@ fn ensure_trigram_fts(conn: &Connection) -> Result<(), DbError> {
 fn is_trigram_fts_definition(sql: &str) -> bool {
     let normalized = sql.to_ascii_lowercase().replace(char::is_whitespace, "");
     normalized.contains("tokenize='trigram'") || normalized.contains("tokenize=\"trigram\"")
+}
+
+fn trim_trailing_path_separators(path: &str) -> &str {
+    let mut end = path.len();
+    while end > 1 {
+        let current = &path[..end];
+        if !(current.ends_with('\\') || current.ends_with('/')) {
+            break;
+        }
+        if end == 3 && current.as_bytes().get(1) == Some(&b':') {
+            break;
+        }
+        end -= 1;
+    }
+    &path[..end]
+}
+
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '~' | '%' | '_') {
+            escaped.push('~');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn build_fts_query(input: &str) -> Option<String> {
@@ -1870,6 +1949,58 @@ mod tests {
         assert_eq!(stats.by_type.get("Document"), Some(&1));
         assert_eq!(stats.by_type.get("Image"), Some(&1));
         assert_eq!(stats.by_lifecycle.get("Inbox"), Some(&2));
+    }
+
+    #[test]
+    fn remove_files_by_paths_deletes_exact_paths_descendants_and_fts_rows() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        db.insert_file(InsertFileRequest {
+            id: "dir-project".to_string(),
+            path: "/test/virtual/documents/project".to_string(),
+            name: "project".to_string(),
+            extension: String::new(),
+            size: 0,
+            mtime: 1_900_000_000,
+            ctime: 0,
+            is_dir: true,
+            state_code: 0,
+        })
+        .expect("insert project directory");
+        db.insert_file(InsertFileRequest {
+            id: "file-ghost".to_string(),
+            path: "/test/virtual/documents/project/ghost-report.pdf".to_string(),
+            name: "ghost-report.pdf".to_string(),
+            extension: "pdf".to_string(),
+            size: 2_048,
+            mtime: 1_900_000_001,
+            ctime: 0,
+            is_dir: false,
+            state_code: 0,
+        })
+        .expect("insert child file");
+        db.insert_file(InsertFileRequest {
+            id: "file-survivor".to_string(),
+            path: "/test/virtual/documents/project-other/survivor.pdf".to_string(),
+            name: "survivor.pdf".to_string(),
+            extension: "pdf".to_string(),
+            size: 2_048,
+            mtime: 1_900_000_002,
+            ctime: 0,
+            is_dir: false,
+            state_code: 0,
+        })
+        .expect("insert sibling file");
+
+        let removed = db
+            .remove_files_by_paths(&["/test/virtual/documents/project".to_string()])
+            .expect("remove paths");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        let ghost_search = db.search_files("ghost-report", Some(10)).expect("search");
+
+        assert_eq!(removed, 2);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].id, "file-survivor");
+        assert!(ghost_search.is_empty());
     }
 
     #[test]

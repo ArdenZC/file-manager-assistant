@@ -3,6 +3,7 @@ import { ChevronRight, File, Search, X } from "lucide-react";
 import { tauriApi } from "../api/tauriApi";
 import type { FileRecord } from "../types/domain";
 import type { Translator, View } from "../types/ui";
+import { cn, emptyState, toneClasses } from "../utils/tw";
 
 export function CommandModal({
   inputRef,
@@ -81,9 +82,20 @@ export function CommandModal({
   }
 
   return (
-    <div className={`command-backdrop ${standalone ? "standalone" : ""}`} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={cn(
+        standalone
+          ? "relative z-10 flex h-full w-full items-start justify-center p-6"
+          : "fixed inset-0 z-40 flex items-start justify-center bg-slate-950/25 px-6 pt-20 backdrop-blur-lg"
+      )}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <div
-        className={`command-modal ${standalone ? "standalone-modal" : ""} ${showResults ? "rounded-24" : "rounded-36"}`}
+        className={cn(
+          "w-full max-w-3xl overflow-hidden border border-[var(--line)] bg-[linear-gradient(135deg,var(--surface-strong),var(--surface-soft))] shadow-[var(--shadow-cmd)] backdrop-blur-3xl transition-all",
+          standalone && "mt-12",
+          showResults ? "rounded-3xl" : "rounded-[2rem]"
+        )}
         onKeyDown={(event) => {
           if ((event.metaKey && event.key === "Backspace") || (event.ctrlKey && event.key === "Backspace")) {
             event.preventDefault();
@@ -104,70 +116,74 @@ export function CommandModal({
           if (event.key === "Escape") onClose();
         }}
       >
-        <div className={`command-search-head ${showResults ? "has-results" : ""}`}>
-          <Search className="command-search-icon" size={20} strokeWidth={2.2} />
+        <div className={cn("flex h-16 items-center gap-3 px-5", showResults && "border-b border-[var(--line-dark)]")}>
+          <Search className="text-blue-500" size={20} strokeWidth={2.2} />
           <input
             ref={inputRef}
             value={search}
             placeholder={t("commandPlaceholder")}
             onChange={(event) => setSearch(event.target.value)}
             onClick={() => inputRef.current?.focus()}
+            className="h-full min-w-0 flex-1 bg-transparent text-base text-[var(--ink)] outline-none placeholder:text-[var(--quiet)]"
           />
           {search && (
-            <button className="command-clear-button" onClick={clearSearch} aria-label={t("clearSearch")}>
+            <button className="grid h-8 w-8 place-items-center rounded-full text-[var(--muted)] transition hover:bg-white/50 hover:text-[var(--ink)] dark:hover:bg-white/10" onClick={clearSearch} aria-label={t("clearSearch")}>
               <X size={16} strokeWidth={2.5} />
             </button>
           )}
-          <kbd className="command-esc-key">ESC</kbd>
+          <kbd className="rounded-md border border-[var(--line-dark)] px-2 py-1 text-[11px] text-[var(--quiet)]">ESC</kbd>
         </div>
         {showResults && (
-          <div className="command-results-panel">
-            <div className="command-results">
-              <div className="command-section-label">{t("smartMatches")}</div>
-              <div className="command-result-stack">
+          <div className="grid gap-0">
+            <div className="px-3 py-3">
+              <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--quiet)]">{t("smartMatches")}</div>
+              <div className="grid gap-1">
                 {visibleResults.map((file, index) => {
                   const tone = getResultTone(file);
                   const extension = file.extension ? file.extension.replace(".", "").toUpperCase() : file.file_type;
                   return (
                     <button
                       key={file.id}
-                      className={`result-item-card ${index === activeIndex ? "active-row" : ""}`}
+                      className={cn(
+                        "grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-3 py-3 text-left transition",
+                        index === activeIndex ? "bg-white/60 shadow-sm dark:bg-white/10" : "hover:bg-white/30 dark:hover:bg-white/10"
+                      )}
                       onClick={() => chooseFile(file)}
                       onMouseEnter={() => setActiveIndex(index)}
                     >
-                      <span className={`result-main-icon ${tone}`}>
+                      <span className={cn("grid h-10 w-10 place-items-center rounded-xl border", toneClasses(tone))}>
                         <File size={20} strokeWidth={1.5} />
                       </span>
-                      <span className="result-copy">
-                        <strong><HighlightText text={file.name} highlight={trimmedSearch} /></strong>
-                        <small>
-                          <span>{file.directory || file.path}</span>
-                          <i />
-                          <em className={tone}>{file.purpose}</em>
+                      <span className="min-w-0">
+                        <strong className="block truncate text-sm font-semibold"><HighlightText text={file.name} highlight={trimmedSearch} /></strong>
+                        <small className="mt-1 flex min-w-0 items-center gap-2 text-xs text-[var(--muted)]">
+                          <span className="truncate">{file.directory || file.path}</span>
+                          <i className="h-1 w-1 shrink-0 rounded-full bg-[var(--quiet)]" />
+                          <em className={cn("shrink-0 not-italic", toneClasses(tone).split(" ").filter((item) => item.startsWith("text-")).join(" "))}>{file.purpose}</em>
                         </small>
                       </span>
-                      <span className="result-trailing">
-                        <em>{extension}</em>
-                        {index === activeIndex && <ChevronRight className="command-row-chevron" size={16} />}
+                      <span className="flex items-center gap-2 text-xs text-[var(--quiet)]">
+                        <em className="not-italic">{extension}</em>
+                        {index === activeIndex && <ChevronRight className="text-blue-500" size={16} />}
                       </span>
                     </button>
                   );
                 })}
               </div>
             </div>
-            <div className="command-action-bar">
+            <div className="flex items-center justify-between gap-4 border-t border-[var(--line-dark)] px-5 py-3 text-xs text-[var(--muted)]">
               <span>{t("matchesFound").replace("{count}", String(visibleResults.length))}</span>
-              <div>
-                <span><kbd>↵</kbd>{t("openResult")}</span>
-                <span><kbd>{locateKey}</kbd>{t("revealPhysical")}</span>
-                <span><kbd>⇥</kbd>{t("sortingAdvice")}</span>
+              <div className="flex items-center gap-3">
+                <span><kbd className="mr-1 rounded border border-[var(--line-dark)] px-1.5 py-0.5">↵</kbd>{t("openResult")}</span>
+                <span><kbd className="mr-1 rounded border border-[var(--line-dark)] px-1.5 py-0.5">{locateKey}</kbd>{t("revealPhysical")}</span>
+                <span><kbd className="mr-1 rounded border border-[var(--line-dark)] px-1.5 py-0.5">⇥</kbd>{t("sortingAdvice")}</span>
               </div>
             </div>
           </div>
         )}
         {trimmedSearch && queryState === "done" && !results.length && (
-          <div className="command-results-panel">
-            <div className="empty-state compact">{t("noOperations")}</div>
+          <div className="px-4 pb-4">
+            <div className={cn(emptyState, "min-h-20")}>{t("noOperations")}</div>
           </div>
         )}
       </div>
@@ -184,7 +200,7 @@ function HighlightText({ text, highlight }: { text: string; highlight: string })
     <>
       {text.split(matcher).map((part, index) => (
         part.toLowerCase() === value.toLowerCase()
-          ? <mark className="highlight-mark" key={`${part}-${index}`}>{part}</mark>
+          ? <mark className="rounded bg-blue-400/20 px-0.5 text-blue-700 dark:text-blue-200" key={`${part}-${index}`}>{part}</mark>
           : <span key={`${part}-${index}`}>{part}</span>
       ))}
     </>

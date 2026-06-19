@@ -31,6 +31,7 @@ import type {
 } from "../types/domain";
 import type { ThemeMode, Translator, View } from "../types/ui";
 import { formatDate } from "../utils/format";
+import { cn, glassButton, glassButtonPrimary, statusToast, toastTone } from "../utils/tw";
 import {
   HubView,
   RestoreView,
@@ -40,6 +41,22 @@ import {
   TimelineView,
   VaultView
 } from "../views/AppViews";
+
+const appRoot =
+  "relative h-screen min-h-[720px] min-w-[1080px] overflow-hidden bg-[var(--bg)] text-[var(--ink)]";
+const titlebar =
+  "relative z-30 grid h-12 grid-cols-[260px_1fr_260px] items-center border-b border-[var(--line-dark)] bg-[var(--surface-soft)] px-4 backdrop-blur-2xl [-webkit-app-region:drag]";
+const noDrag = "[-webkit-app-region:no-drag]";
+const spotlightButton =
+  "mx-auto inline-flex h-8 min-w-80 items-center justify-between gap-3 rounded-full border border-[var(--line-dark)] bg-white/40 px-3 text-xs text-[var(--muted)] shadow-sm transition hover:bg-white/70 dark:bg-white/5 dark:hover:bg-white/10 [&_kbd]:rounded-md [&_kbd]:border [&_kbd]:border-[var(--line-dark)] [&_kbd]:px-1.5 [&_kbd]:py-0.5 [&_kbd]:text-[11px] [&_kbd]:text-[var(--quiet)]";
+const workspaceShell = "relative z-10 grid h-[calc(100vh-48px)] grid-cols-[260px_minmax(0,1fr)]";
+const sidebarClass =
+  "flex min-h-0 flex-col gap-5 border-r border-[var(--line-dark)] bg-[var(--surface-soft)] px-5 py-6 backdrop-blur-2xl";
+const navItemBase =
+  "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-[var(--muted)] transition hover:bg-white/40 hover:text-[var(--ink)] dark:hover:bg-white/10";
+const navItemActive = "bg-blue-500/10 text-[var(--ink)] shadow-sm";
+const workspaceClass = "min-w-0 overflow-hidden px-6 py-5";
+const viewStageClass = "h-[calc(100vh-170px)] overflow-hidden";
 
 interface AppShellProps {
   language: Language;
@@ -106,33 +123,33 @@ export function AppShell(props: AppShellProps) {
         : props.t("notScannedYet");
 
   return (
-    <div className="zen-app">
+    <div className={appRoot}>
       <AmbientMesh />
-      <header className={`native-titlebar ${props.isWindows ? "is-windows" : "is-macos"}`}>
-        <div className="titlebar-left">
+      <header className={titlebar}>
+        <div className="flex items-center justify-start">
           {!props.isWindows ? <MacWindowControls {...props} /> : <TitlebarTools {...props} />}
         </div>
-        <div className="titlebar-center">
-          <button className="spotlight-trigger" onClick={() => props.setIsCommandOpen(true)}>
+        <div className="flex items-center justify-center">
+          <button className={cn(spotlightButton, noDrag)} onClick={() => props.setIsCommandOpen(true)}>
             <Search size={15} />
             <span>{props.t("globalSearch")}</span>
             <kbd>{props.hotkeyLabel}</kbd>
           </button>
         </div>
-        <div className="titlebar-right">
+        <div className="flex items-center justify-end">
           {!props.isWindows ? <TitlebarTools {...props} /> : <WindowsControls {...props} />}
         </div>
       </header>
-      <div className="zen-shell">
+      <div className={workspaceShell}>
         <Sidebar {...props} nav={nav} />
-        <main className="zen-workspace">
+        <main className={workspaceClass}>
           <ViewHeading {...props} activeLabel={activeLabel} headingDescription={headingDescription} />
           {props.toast && (
-            <div className={`system-toast system-toast--${props.toast.type}`}>
+            <div className={cn(statusToast, toastTone(props.toast.type))}>
               {props.toast.message}
             </div>
           )}
-          <div className="view-stage">
+          <div className={viewStageClass}>
             <ViewErrorBoundary key={props.view}>
               <AppViewContent {...props} />
             </ViewErrorBoundary>
@@ -149,7 +166,7 @@ export function AppShell(props: AppShellProps) {
 
 function SearchWindow(props: AppShellProps) {
   return (
-    <div className="zen-app search-window">
+    <div className={cn(appRoot, "flex items-center justify-center")}>
       {props.isCommandOpen && <CommandLauncher {...props} standalone />}
     </div>
   );
@@ -171,24 +188,24 @@ function CommandLauncher(props: AppShellProps & { standalone?: boolean }) {
 
 function MacWindowControls({ handleWindowAction, t }: AppShellProps) {
   return (
-    <div className="window-controls" aria-label="Window controls">
-      <button className="traffic-dot red" onClick={() => handleWindowAction("close")} aria-label={t("close")} />
-      <button className="traffic-dot yellow" onClick={() => handleWindowAction("minimize")} aria-label={t("minimize")} />
-      <button className="traffic-dot green" onClick={() => handleWindowAction("maximize")} aria-label={t("maximize")} />
+    <div className={cn("flex items-center gap-2", noDrag)} aria-label="Window controls">
+      <button className="h-3 w-3 rounded-full bg-red-500 shadow-sm" onClick={() => handleWindowAction("close")} aria-label={t("close")} />
+      <button className="h-3 w-3 rounded-full bg-amber-400 shadow-sm" onClick={() => handleWindowAction("minimize")} aria-label={t("minimize")} />
+      <button className="h-3 w-3 rounded-full bg-emerald-500 shadow-sm" onClick={() => handleWindowAction("maximize")} aria-label={t("maximize")} />
     </div>
   );
 }
 
 function WindowsControls({ handleWindowAction, t }: AppShellProps) {
   return (
-    <div className="win-controls" aria-label="Window controls">
-      <button className="win-btn" onClick={() => handleWindowAction("minimize")} aria-label={t("minimize")}>
+    <div className={cn("flex items-center overflow-hidden rounded-lg border border-[var(--line-dark)] bg-white/30 dark:bg-white/5", noDrag)} aria-label="Window controls">
+      <button className="grid h-8 w-10 place-items-center text-[var(--muted)] transition hover:bg-white/50 hover:text-[var(--ink)] dark:hover:bg-white/10" onClick={() => handleWindowAction("minimize")} aria-label={t("minimize")}>
         <Minus size={15} strokeWidth={1.6} />
       </button>
-      <button className="win-btn" onClick={() => handleWindowAction("maximize")} aria-label={t("maximize")}>
+      <button className="grid h-8 w-10 place-items-center text-[var(--muted)] transition hover:bg-white/50 hover:text-[var(--ink)] dark:hover:bg-white/10" onClick={() => handleWindowAction("maximize")} aria-label={t("maximize")}>
         <Square size={12} strokeWidth={1.6} />
       </button>
-      <button className="win-btn close" onClick={() => handleWindowAction("close")} aria-label={t("close")}>
+      <button className="grid h-8 w-10 place-items-center text-[var(--muted)] transition hover:bg-red-500 hover:text-white" onClick={() => handleWindowAction("close")} aria-label={t("close")}>
         <X size={16} strokeWidth={1.6} />
       </button>
     </div>
@@ -197,36 +214,36 @@ function WindowsControls({ handleWindowAction, t }: AppShellProps) {
 
 function Sidebar(props: AppShellProps & { nav: ReturnType<typeof navItems> }) {
   return (
-    <aside className="zen-sidebar">
-      <div className="brand-block">
+    <aside className={sidebarClass}>
+      <div className="flex items-center gap-3">
         <ZenMark />
         <div>
-          <strong>{props.t("appName")}</strong>
-          <span>{props.t("appSubtitle")}</span>
+          <strong className="block text-base font-semibold">{props.t("appName")}</strong>
+          <span className="block text-xs text-[var(--muted)]">{props.t("appSubtitle")}</span>
         </div>
       </div>
-      <nav className="zen-nav">
+      <nav className="flex flex-1 flex-col gap-1">
         {props.nav.map((item, index) => (
           <button
             key={item.id}
-            className={`zen-nav-item ${props.view === item.id ? "active" : ""} ${index === 4 ? "with-divider" : ""}`}
+            className={cn(navItemBase, props.view === item.id && navItemActive, index === 4 && "mt-3 border-t border-[var(--line-dark)] pt-4")}
             onClick={() => props.setView(item.id)}
           >
             <item.icon size={18} />
             <span>{item.label}</span>
             {item.id === "preview" && props.previewActionCount > 0 && (
-              <span className="nav-badge" aria-label={`${props.previewActionCount} pending`}>
+              <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500/10 px-1 text-[11px] font-medium text-red-600 dark:text-red-300" aria-label={`${props.previewActionCount} pending`}>
                 {props.previewActionCount}
               </span>
             )}
           </button>
         ))}
       </nav>
-      <div className="privacy-card">
+      <div className="mt-auto flex items-start gap-3 rounded-2xl border border-[var(--line-dark)] bg-white/30 p-3 text-sm dark:bg-white/5">
         <LockKeyhole size={18} />
         <div>
-          <strong>{props.t("privateByDefault")}</strong>
-          <span>{props.t("privacyLine")}</span>
+          <strong className="block text-[var(--ink)]">{props.t("privateByDefault")}</strong>
+          <span className="block text-xs text-[var(--muted)]">{props.t("privacyLine")}</span>
         </div>
       </div>
     </aside>
@@ -235,19 +252,19 @@ function Sidebar(props: AppShellProps & { nav: ReturnType<typeof navItems> }) {
 
 function ViewHeading(props: AppShellProps & { activeLabel: string; headingDescription: string }) {
   return (
-    <div className="view-heading">
+    <div className="mb-4 flex items-center justify-between gap-4">
       <div>
-        <h1>{props.activeLabel}</h1>
-        <p>{props.headingDescription}</p>
+        <h1 className="m-0 text-2xl font-semibold">{props.activeLabel}</h1>
+        <p className="mt-1 text-sm text-[var(--muted)]">{props.headingDescription}</p>
       </div>
       {props.view !== "scanner" && (
-        <div className="view-heading-actions">
-          <button className="glass-button" onClick={props.handleChooseFolders} disabled={props.isScanning}>
+        <div className="flex items-center gap-2">
+          <button className={glassButton} onClick={props.handleChooseFolders} disabled={props.isScanning}>
             <FolderSearch size={17} />
             <span>{props.t("chooseFolders")}</span>
           </button>
-          <button className="glass-button primary" onClick={props.handleScan} disabled={props.isScanning}>
-            <RefreshCw size={17} className={props.isScanning ? "spin" : ""} />
+          <button className={glassButtonPrimary} onClick={props.handleScan} disabled={props.isScanning}>
+            <RefreshCw size={17} className={props.isScanning ? "animate-spin" : ""} />
             <span>{props.t("scanCommon")}</span>
           </button>
         </div>

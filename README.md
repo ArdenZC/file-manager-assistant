@@ -13,9 +13,11 @@
 </div>
 
 <div align="center">
-  <img src="https://img.shields.io/badge/Electron-3178C6?style=for-the-badge&logo=electron&logoColor=white" alt="Electron" />
-  <img src="https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
+  <img src="https://img.shields.io/badge/Tauri_2-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri 2" />
+  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/React_19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
   <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Vite_8-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite 8" />
   <img src="https://img.shields.io/badge/SQLite_FTS5-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite FTS5" />
 </div>
 
@@ -51,17 +53,18 @@
 - 敏感文件只显示建议和原因，不生成默认可执行勾选。
 - 冲突、低置信、规则接近项默认进入待确认队列。
 - 执行层会再次校验操作类型、绝对路径、安全文件名、源路径一致性、系统目录和覆盖冲突。
-- Electron 启用 `contextIsolation`、禁用 `nodeIntegration`、启用 sandbox，并拒绝异常导航、弹窗和权限请求。
+- 桌面层使用 Tauri 2 + Rust IPC，前端不直接访问文件系统；扫描、索引、移动、重命名和恢复都在 Rust 命令层校验。
 
 ## 技术架构
 
 ```text
 React 19 UI
-  -> Secure Preload IPC
-    -> Electron Main Process
-      -> SQLite WAL + FTS5
-      -> Chokidar stale-source watcher
-      -> guarded move / rename executor
+  -> Tauri 2 IPC commands / events
+    -> Rust backend
+      -> rusqlite + SQLite WAL + FTS5 trigram
+      -> r2d2 connection pool
+      -> notify watcher + jwalk scanner
+      -> guarded move / rename / restore executor
 ```
 
 ## 开发
@@ -71,6 +74,7 @@ npm install
 npm run dev
 npm run typecheck
 npm test
+cd src-tauri && cargo test -p zen-canvas-tauri && cd ..
 npm run test:performance
 npm run build
 npm run security:audit
@@ -84,17 +88,11 @@ npm run verify
 
 ## 打包与发布
 
-本项目发布 Windows 和 macOS 未签名公开版，后续预留签名配置。
+本项目已迁移到 Tauri 2，当前打包入口为 Tauri 构建。默认构建会生成当前平台的桌面应用和安装包；签名配置后续预留。
 
 ```bash
 npm run assets:brand
-npm run dist:win
-npm run dist:mac
+npm run build
 ```
 
-发布目标：
-
-- Windows: NSIS + zip, `x64` / `ia32` / `arm64`
-- macOS: dmg + zip, `x64` / `arm64`
-
-GitHub Actions 工作流 `.github/workflows/release-build.yml` 会在 `v*` tag 推送时构建软件包，并挂载到 GitHub Release。
+Windows 构建会输出 NSIS 安装包到 `src-tauri/target/release/bundle/nsis/`。跨平台发布矩阵和签名流程会随 Tauri 发布配置继续完善。

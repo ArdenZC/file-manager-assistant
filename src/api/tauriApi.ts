@@ -120,6 +120,10 @@ export const tauriApi = {
     return invokeCommand<void>("insert_file", { file });
   },
 
+  removeFilesByPaths(paths: string[]): Promise<number> {
+    return invokeCommand<number>("remove_files_by_paths", { paths });
+  },
+
   onScanProgress(handler: EventHandler<ScanProgressPayload>): Promise<UnlistenFn> {
     return listenTo("scan-progress", handler);
   },
