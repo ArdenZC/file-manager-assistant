@@ -1,10 +1,10 @@
+use crate::path_filter::is_ignored_dir_name;
 use notify::{
     event::ModifyKind, recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode,
     Watcher,
 };
 use serde::Serialize;
 use std::{
-    ffi::OsStr,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
     thread,
@@ -174,47 +174,7 @@ fn normalize_watch_roots(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, WatcherErr
 
 fn is_ignored_path(path: &Path) -> bool {
     path.components()
-        .any(|component| should_skip_component(component.as_os_str()))
-}
-
-fn should_skip_component(name: &OsStr) -> bool {
-    let lower = name.to_string_lossy().to_ascii_lowercase();
-
-    matches!(
-        lower.as_str(),
-        ".git"
-            | ".hg"
-            | ".svn"
-            | ".idea"
-            | ".vscode"
-            | ".cache"
-            | ".parcel-cache"
-            | ".turbo"
-            | ".next"
-            | ".nuxt"
-            | ".venv"
-            | "__pycache__"
-            | "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | "coverage"
-            | "vendor"
-            | "venv"
-            | "pods"
-            | "deriveddata"
-            | "appdata"
-            | "library"
-            | "system volume information"
-            | "$recycle.bin"
-            | "windows"
-            | "program files"
-            | "program files (x86)"
-            | "programdata"
-            | "$windows.~bt"
-            | "$winreagent"
-            | "recovery"
-    )
+        .any(|component| is_ignored_dir_name(component.as_os_str()))
 }
 
 fn normalize_path(path: &Path) -> String {

@@ -7,8 +7,10 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
+use sysinfo::Disks;
 use tauri::State;
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -39,6 +41,7 @@ struct IndexedFileRow {
     extension: String,
     size: i64,
     mtime: i64,
+    ctime: i64,
     is_dir: bool,
     state_code: i64,
     file_type: String,
@@ -55,6 +58,8 @@ struct IndexedFileRow {
     requires_confirmation: bool,
 }
 
+const CLASSIFY_BATCH_SIZE: usize = 500;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsertFileRequest {
@@ -64,6 +69,8 @@ pub struct InsertFileRequest {
     pub extension: String,
     pub size: i64,
     pub mtime: i64,
+    #[serde(default)]
+    pub ctime: i64,
     pub is_dir: bool,
     pub state_code: i64,
 }
@@ -252,15 +259,16 @@ impl Database {
             let mut stmt = tx.prepare(
                 r#"
             INSERT INTO files (
-                id, path, name, extension, size, mtime, is_dir, state_code, file_type, suggested_name
+                id, path, name, extension, size, mtime, ctime, is_dir, state_code, file_type, suggested_name
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(id) DO UPDATE SET
                 path = excluded.path,
                 name = excluded.name,
                 extension = excluded.extension,
                 size = excluded.size,
                 mtime = excluded.mtime,
+                ctime = excluded.ctime,
                 is_dir = excluded.is_dir,
                 state_code = excluded.state_code,
                 file_type = excluded.file_type,
@@ -281,6 +289,7 @@ impl Database {
                     file.extension,
                     file.size,
                     file.mtime,
+                    file.ctime,
                     bool_to_i64(file.is_dir),
                     file.state_code,
                     file_type,
@@ -296,72 +305,50 @@ impl Database {
         &self,
         rules: Vec<Rule>,
     ) -> Result<RuleExecutionSummary, DbError> {
-        let mut conn = self.conn()?;
-        let rows = {
-            let mut stmt = conn.prepare(
-                r#"
-                SELECT id, path, name, extension, size, mtime, is_dir, state_code,
+        let all_rules: Vec<Rule> = built_in_rules()
+            .into_iter()
+            .chain(rules.into_iter().filter(|rule| rule.enabled))
+            .collect();
+        let read_conn = self.conn()?;
+        let mut write_conn = self.conn()?;
+        let mut stmt = read_conn.prepare(
+            r#"
+                SELECT id, path, name, extension, size, mtime, ctime, is_dir, state_code,
                        file_type, purpose, lifecycle, context, risk_level, suggested_action,
                        suggested_target_path, suggested_name, confidence, classification_reason,
                        matched_rules, requires_confirmation
                 FROM files
                 ORDER BY mtime DESC, name COLLATE NOCASE ASC
                 "#,
-            )?;
-            let rows = stmt.query_map([], indexed_file_from_row)?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        };
+        )?;
+        let mut rows = stmt.query([])?;
 
+        let mut scanned = 0_i64;
         let mut updated = 0_i64;
         let mut needs_confirmation = 0_i64;
-        let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                r#"
-                UPDATE files
-                SET file_type = ?2,
-                    purpose = ?3,
-                    lifecycle = ?4,
-                    context = ?5,
-                    risk_level = ?6,
-                    suggested_action = ?7,
-                    suggested_target_path = ?8,
-                    suggested_name = ?9,
-                    confidence = ?10,
-                    classification_reason = ?11,
-                    matched_rules = ?12,
-                    requires_confirmation = ?13
-                WHERE id = ?1
-                "#,
-            )?;
+        let mut batch = Vec::with_capacity(CLASSIFY_BATCH_SIZE);
 
-            for row in &rows {
-                let classification = classify_indexed_file(row, &rules)?;
-                if classification.requires_confirmation {
-                    needs_confirmation += 1;
-                }
-                stmt.execute(params![
-                    row.id,
-                    classification.file_type,
-                    classification.purpose,
-                    classification.lifecycle,
-                    classification.context,
-                    classification.risk_level,
-                    classification.suggested_action,
-                    classification.suggested_target_path,
-                    classification.suggested_name,
-                    classification.confidence,
-                    classification.classification_reason,
-                    classification.matched_rules,
-                    bool_to_i64(classification.requires_confirmation)
-                ])?;
-                updated += 1;
+        while let Some(row) = rows.next()? {
+            batch.push(indexed_file_from_row(row)?);
+            scanned += 1;
+
+            if batch.len() == CLASSIFY_BATCH_SIZE {
+                let batch_summary =
+                    execute_classification_batch(&mut write_conn, &batch, &all_rules)?;
+                updated += batch_summary.updated;
+                needs_confirmation += batch_summary.needs_confirmation;
+                batch.clear();
             }
         }
-        tx.commit()?;
+
+        if !batch.is_empty() {
+            let batch_summary = execute_classification_batch(&mut write_conn, &batch, &all_rules)?;
+            updated += batch_summary.updated;
+            needs_confirmation += batch_summary.needs_confirmation;
+        }
 
         Ok(RuleExecutionSummary {
-            scanned: rows.len() as i64,
+            scanned,
             updated,
             needs_confirmation,
         })
@@ -441,6 +428,7 @@ impl Database {
                     f.extension,
                     f.size,
                     f.mtime,
+                    f.ctime,
                     f.is_dir,
                     f.state_code,
                     f.file_type,
@@ -465,7 +453,7 @@ impl Database {
             )?;
             let rows = stmt.query_map(
                 params![fts_query, i64::from(limit), i64::from(offset)],
-                |row| indexed_file_from_row(row),
+                indexed_file_from_row,
             )?;
             let files = rows
                 .map(|row| row.map(|file| file_record_from_indexed(file, &now)))
@@ -482,7 +470,7 @@ impl Database {
         let total = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, path, name, extension, size, mtime, is_dir, state_code,
+            SELECT id, path, name, extension, size, mtime, ctime, is_dir, state_code,
                    file_type, purpose, lifecycle, context, risk_level, suggested_action,
                    suggested_target_path, suggested_name, confidence, classification_reason,
                    matched_rules, requires_confirmation
@@ -577,12 +565,25 @@ impl Database {
             by_lifecycle.insert(lifecycle, count);
         }
 
+        let disks = Disks::new_with_refreshed_list();
+        // 取空间最大的磁盘作为代表（通常是系统盘）
+        let (disk_total, disk_free) = disks
+            .iter()
+            .map(|d| (d.total_space(), d.available_space()))
+            .max_by_key(|(total, _)| *total)
+            .unwrap_or((0, 0));
+        let disk_usage_ratio = if disk_total > 0 {
+            1.0 - (disk_free as f64 / disk_total as f64)
+        } else {
+            0.0
+        };
+
         Ok(StatsSummary {
             total_files,
             total_size,
-            disk_total_size: 0,
-            disk_free_size: 0,
-            disk_usage_ratio: 0.0,
+            disk_total_size: disk_total as i64,
+            disk_free_size: disk_free as i64,
+            disk_usage_ratio,
             duplicate_files: 0,
             large_files,
             sensitive_files,
@@ -665,6 +666,7 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
             extension TEXT NOT NULL DEFAULT '',
             size INTEGER NOT NULL DEFAULT 0,
             mtime INTEGER NOT NULL DEFAULT 0,
+            ctime INTEGER NOT NULL DEFAULT 0,
             is_dir INTEGER NOT NULL DEFAULT 0 CHECK (is_dir IN (0, 1)),
             state_code INTEGER NOT NULL DEFAULT 0
         );
@@ -710,6 +712,11 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
 }
 
 fn ensure_file_classification_columns(conn: &Connection) -> Result<(), DbError> {
+    add_column_if_missing(
+        conn,
+        "ctime",
+        "ALTER TABLE files ADD COLUMN ctime INTEGER NOT NULL DEFAULT 0",
+    )?;
     add_column_if_missing(
         conn,
         "file_type",
@@ -787,13 +794,18 @@ fn add_column_if_missing(conn: &Connection, column: &str, alter_sql: &str) -> Re
     Ok(())
 }
 
+static FTS5_CHECKED: OnceLock<()> = OnceLock::new();
+
 fn assert_fts5_available(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(
-        r#"
-        CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(value, tokenize='trigram');
-        DROP TABLE temp.fts5_probe;
-        "#,
-    )?;
+    if FTS5_CHECKED.get().is_none() {
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(value, tokenize='trigram');
+            DROP TABLE temp.fts5_probe;
+            "#,
+        )?;
+        let _ = FTS5_CHECKED.set(());
+    }
     Ok(())
 }
 
@@ -842,7 +854,6 @@ fn is_trigram_fts_definition(sql: &str) -> bool {
 
 fn build_fts_query(input: &str) -> Option<String> {
     let phrases = input
-        .trim()
         .split_whitespace()
         .filter(|phrase| !phrase.is_empty())
         .take(12)
@@ -880,24 +891,26 @@ fn indexed_file_from_row(row: &Row<'_>) -> rusqlite::Result<IndexedFileRow> {
         extension: row.get(3)?,
         size: row.get(4)?,
         mtime: row.get(5)?,
-        is_dir: row.get::<_, i64>(6)? != 0,
-        state_code: row.get(7)?,
-        file_type: row.get(8)?,
-        purpose: row.get(9)?,
-        lifecycle: row.get(10)?,
-        context: row.get(11)?,
-        risk_level: row.get(12)?,
-        suggested_action: row.get(13)?,
-        suggested_target_path: row.get(14)?,
-        suggested_name: row.get(15)?,
-        confidence: row.get(16)?,
-        classification_reason: row.get(17)?,
-        matched_rules: row.get(18)?,
-        requires_confirmation: row.get::<_, i64>(19)? != 0,
+        ctime: row.get(6)?,
+        is_dir: row.get::<_, i64>(7)? != 0,
+        state_code: row.get(8)?,
+        file_type: row.get(9)?,
+        purpose: row.get(10)?,
+        lifecycle: row.get(11)?,
+        context: row.get(12)?,
+        risk_level: row.get(13)?,
+        suggested_action: row.get(14)?,
+        suggested_target_path: row.get(15)?,
+        suggested_name: row.get(16)?,
+        confidence: row.get(17)?,
+        classification_reason: row.get(18)?,
+        matched_rules: row.get(19)?,
+        requires_confirmation: row.get::<_, i64>(20)? != 0,
     })
 }
 
 fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
+    let created_at = unix_seconds_to_iso(if row.ctime == 0 { row.mtime } else { row.ctime });
     let modified_at = unix_seconds_to_iso(row.mtime);
     let file_type = normalized_file_type(&row);
     let matched_rules = serde_json::from_str::<Vec<String>>(&row.matched_rules).unwrap_or_default();
@@ -915,7 +928,7 @@ fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
         context: row.context,
         risk_level: row.risk_level,
         hash: None,
-        created_at: modified_at.clone(),
+        created_at,
         modified_at,
         scanned_at: now.to_string(),
         last_seen_at: now.to_string(),
@@ -970,23 +983,79 @@ struct ClassificationUpdate {
     requires_confirmation: bool,
 }
 
+fn execute_classification_batch(
+    conn: &mut Connection,
+    batch: &[IndexedFileRow],
+    all_rules: &[Rule],
+) -> Result<RuleExecutionSummary, DbError> {
+    let mut updated = 0_i64;
+    let mut needs_confirmation = 0_i64;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            r#"
+                UPDATE files
+                SET file_type = ?2,
+                    purpose = ?3,
+                    lifecycle = ?4,
+                    context = ?5,
+                    risk_level = ?6,
+                    suggested_action = ?7,
+                    suggested_target_path = ?8,
+                    suggested_name = ?9,
+                    confidence = ?10,
+                    classification_reason = ?11,
+                    matched_rules = ?12,
+                    requires_confirmation = ?13
+                WHERE id = ?1
+                "#,
+        )?;
+
+        for row in batch {
+            let classification = classify_indexed_file(row, all_rules)?;
+            if classification.requires_confirmation {
+                needs_confirmation += 1;
+            }
+            stmt.execute(params![
+                row.id,
+                classification.file_type,
+                classification.purpose,
+                classification.lifecycle,
+                classification.context,
+                classification.risk_level,
+                classification.suggested_action,
+                classification.suggested_target_path,
+                classification.suggested_name,
+                classification.confidence,
+                classification.classification_reason,
+                classification.matched_rules,
+                bool_to_i64(classification.requires_confirmation)
+            ])?;
+            updated += 1;
+        }
+    }
+    tx.commit()?;
+
+    Ok(RuleExecutionSummary {
+        scanned: batch.len() as i64,
+        updated,
+        needs_confirmation,
+    })
+}
+
 fn classify_indexed_file(
     row: &IndexedFileRow,
-    user_rules: &[Rule],
+    all_rules: &[Rule],
 ) -> Result<ClassificationUpdate, DbError> {
     let file_type = normalized_file_type(row);
     let builtin = classify_builtin(row, &file_type);
-    let rules = built_in_rules()
-        .into_iter()
-        .chain(user_rules.iter().filter(|rule| rule.enabled).cloned())
-        .collect::<Vec<_>>();
-    let mut candidates = rules
-        .into_iter()
+    let mut candidates = all_rules
+        .iter()
         .filter_map(|rule| {
-            let matches = evaluate_rule(&rule, row, &file_type);
+            let matches = evaluate_rule(rule, row, &file_type);
             matches.then(|| RuleCandidate {
                 score: rule.weight + rule.priority * 0.1,
-                rule,
+                rule: rule.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -1613,9 +1682,7 @@ fn clean_name(value: &str) -> String {
 }
 
 fn safe_action(action: &str, risk_level: &str) -> String {
-    if risk_level == "Sensitive" && action != "Keep" {
-        "Review".to_string()
-    } else if action == "DeleteCandidate" {
+    if (risk_level == "Sensitive" && action != "Keep") || action == "DeleteCandidate" {
         "Review".to_string()
     } else {
         action.to_string()
@@ -1682,13 +1749,8 @@ fn json_value_to_f64(value: &Value) -> f64 {
     match value {
         Value::Number(value) => value.as_f64().unwrap_or(0.0),
         Value::String(value) => value.parse().unwrap_or(0.0),
-        Value::Bool(value) => {
-            if *value {
-                1.0
-            } else {
-                0.0
-            }
-        }
+        Value::Bool(true) => 1.0,
+        Value::Bool(false) => 0.0,
         _ => 0.0,
     }
 }
@@ -1995,6 +2057,7 @@ mod tests {
             extension: extension.to_string(),
             size,
             mtime,
+            ctime: 0,
             is_dir: false,
             state_code: 0,
         })

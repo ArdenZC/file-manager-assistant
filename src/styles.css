@@ -645,7 +645,6 @@ kbd {
   border-color: rgba(255, 255, 255, 0.08);
 }
 
-.system-toast,
 .glass-panel,
 .metric-card {
   background: linear-gradient(135deg, var(--surface), var(--surface-soft));
@@ -653,14 +652,6 @@ kbd {
   box-shadow: var(--shadow), var(--inset);
   backdrop-filter: blur(40px) saturate(180%);
   -webkit-backdrop-filter: blur(40px) saturate(180%);
-}
-
-.system-toast {
-  margin-bottom: 14px;
-  border-radius: 16px;
-  padding: 11px 14px;
-  color: var(--muted);
-  font-size: 13px;
 }
 
 .glass-panel {
@@ -1675,11 +1666,6 @@ code {
 .advanced-settings summary {
   cursor: pointer;
   font-weight: 780;
-}
-
-.system-toast.inline {
-  position: static;
-  margin-top: 12px;
 }
 
 .empty-state {
@@ -4804,7 +4790,6 @@ body,
   box-shadow: 0 28px 76px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.12);
 }
 
-.system-toast,
 .empty-state {
   background: linear-gradient(135deg, var(--surface), var(--surface-soft));
   border: 1px solid var(--line);

@@ -447,5 +447,8 @@ const en: Record<keyof typeof zh, string> = {
 const dict = { zh, en } as const;
 
 export function makeTranslator(language: Language) {
-  return (key: keyof typeof zh) => dict[language][key];
+  const dict = language === "zh" ? zh : en;
+  return function t(key: keyof typeof zh): string {
+    return (dict as Record<string, string>)[key] ?? (en as Record<string, string>)[key] ?? key;
+  };
 }

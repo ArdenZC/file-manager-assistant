@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Archive,
   Clock3,
@@ -17,10 +18,13 @@ import {
 } from "lucide-react";
 import { tauriApi } from "./api/tauriApi";
 import { CommandModal } from "./components/CommandModal";
+import { ViewErrorBoundary } from "./components/ErrorBoundary";
 import { AmbientMesh, CloseChoiceDialog, TitlebarTools, ZenMark } from "./components/ShellChrome";
 import { makeTranslator } from "./i18n";
+import { useDebounce } from "./hooks/useDebounce";
 import { useScanProgress } from "./hooks/useScanProgress";
 import { useAppStore } from "./store/useAppStore";
+import { useRulesStore } from "./store/useRulesStore";
 import type {
   CloseBehavior,
   DashboardStats,
@@ -52,6 +56,7 @@ import {
 } from "./views/AppViews";
 
 const PAGE_SIZE = 50;
+const MAX_LOGS = 500;
 
 const emptyStats: DashboardStats = {
   totalFiles: 0,
@@ -75,6 +80,8 @@ const emptyPage: FileQueryResult = {
   offset: 0
 };
 
+const IS_SEARCH_MODE = new URLSearchParams(window.location.search).get("mode") === "search";
+
 export function App() {
   const language = useAppStore((state) => state.language);
   const setLanguage = useAppStore((state) => state.setLanguage);
@@ -84,17 +91,19 @@ export function App() {
   const setView = useAppStore((state) => state.setView);
   const searchQuery = useAppStore((state) => state.searchQuery);
   const setSearchQuery = useAppStore((state) => state.setSearchQuery);
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
+  const rules = useRulesStore((state) => state.rules);
+  const addRule = useRulesStore((state) => state.addRule);
   const [systemDark, setSystemDark] = useState(() => prefersDarkScheme());
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [libraryPage, setLibraryPage] = useState<FileQueryResult>(emptyPage);
   const [selectedFileId, setSelectedFileId] = useState("");
   const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
-  const [rules, setRules] = useState<Rule[]>([]);
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
   const [selectedOperationIds, setSelectedOperationIds] = useState<Set<string>>(new Set());
   const [previewNameOverrides, setPreviewNameOverrides] = useState<Record<string, string>>({});
   const [isScanning, setIsScanning] = useState(false);
-  const [status, setStatus] = useState("");
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(() => {
@@ -106,29 +115,31 @@ export function App() {
   const lastScanStatsRefreshRef = useRef(0);
   const platform = detectBrowserPlatform();
   const isWindows = platform === "win32";
-  const isSearchMode = new URLSearchParams(window.location.search).get("mode") === "search";
   const effectiveTheme: Exclude<ThemeMode, "system"> = theme === "system" ? (systemDark ? "dark" : "light") : theme;
   const hotkeyLabel = platform === "darwin" ? "⌘ K" : "Ctrl K";
   const t = useMemo(() => makeTranslator(language), [language]);
+  const showSuccess = (msg: string) => setToast({ message: msg, type: "success" });
+  const showError = (msg: string) => setToast({ message: msg, type: "error" });
 
   const loadStats = useCallback(async () => {
     try {
       setStats(await tauriApi.getStatsSummary());
-    } catch {
+    } catch (error) {
       setStats(emptyStats);
+      showError(readableError(error));
     }
   }, []);
 
   const loadFirstPage = useCallback(async () => {
     try {
-      const page = await tauriApi.getPagedFiles(PAGE_SIZE, 0, searchQuery);
+      const page = await tauriApi.getPagedFiles(PAGE_SIZE, 0, debouncedSearchQuery || undefined);
       setLibraryPage(page);
       setSelectedFileId((current) => current || page.files[0]?.id || "");
     } catch (error) {
       setLibraryPage(emptyPage);
-      setStatus(readableError(error));
+      showError(readableError(error));
     }
-  }, [searchQuery]);
+  }, [debouncedSearchQuery]);
 
   const refreshStatsDuringScan = useCallback(() => {
     const now = Date.now();
@@ -146,13 +157,13 @@ export function App() {
   });
 
   useEffect(() => {
-    document.documentElement.classList.toggle("search-window-root", isSearchMode);
-    document.body.classList.toggle("search-window-root", isSearchMode);
+    document.documentElement.classList.toggle("search-window-root", IS_SEARCH_MODE);
+    document.body.classList.toggle("search-window-root", IS_SEARCH_MODE);
     return () => {
       document.documentElement.classList.remove("search-window-root");
       document.body.classList.remove("search-window-root");
     };
-  }, [isSearchMode]);
+  }, []);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -205,12 +216,12 @@ export function App() {
   }, [isCommandOpen]);
 
   useEffect(() => {
-    if (isSearchMode) {
+    if (IS_SEARCH_MODE) {
       setTheme(preferredTheme());
       setLanguage(preferredLanguage());
       setIsCommandOpen(true);
     }
-  }, [isSearchMode, setLanguage, setTheme]);
+  }, [setLanguage, setTheme]);
 
   const files = libraryPage.files;
   const selectedFile = files.find((file) => file.id === selectedFileId) ?? files[0];
@@ -249,26 +260,29 @@ export function App() {
 
   async function scanPath(path: string) {
     if (!path) {
-      setStatus(t("noFolderSelected"));
+      showError(t("noFolderSelected"));
       return;
     }
     setSelectedFolders([path]);
     setIsScanning(true);
-    setStatus("");
+    setToast(null);
     scanState.reset();
     try {
       const summary = await scanState.startScan(path);
       await Promise.all([loadStats(), loadFirstPage()]);
-      setStatus(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
+      showSuccess(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
     } catch (error) {
-      setStatus(readableError(error));
+      showError(readableError(error));
     } finally {
       setIsScanning(false);
     }
   }
 
   async function handleScan() {
-    await scanPath(selectedFolders[0] || askForScanPath());
+    const paths = selectedFolders.length > 0 ? selectedFolders : [askForScanPath()].filter(Boolean);
+    for (const p of paths) {
+      if (p) await scanPath(p);
+    }
   }
 
   async function handleChooseFolders() {
@@ -276,21 +290,22 @@ export function App() {
   }
 
   async function cancelScan() {
-    setStatus(t("scanCanceling"));
+    await tauriApi.cancelScan();
+    setIsScanning(false);
   }
 
   async function saveRule(rule: Rule) {
-    setRules((current) => [...current, rule]);
+    addRule(rule);
   }
 
   async function runDispatch() {
     try {
       const summary = await tauriApi.executeRulesOnInbox(rules);
       await Promise.all([loadStats(), loadFirstPage()]);
-      setStatus(`${t("success")}: ${summary.updated.toLocaleString()} / ${summary.scanned.toLocaleString()}`);
+      showSuccess(`${t("success")}: ${summary.updated.toLocaleString()} / ${summary.scanned.toLocaleString()}`);
       return summary;
     } catch (error) {
-      setStatus(readableError(error));
+      showError(readableError(error));
       throw error;
     }
   }
@@ -302,12 +317,12 @@ export function App() {
     if (!operations.length) return;
     try {
       const result = await tauriApi.executeMoves(operations as OperationPreview[]);
-      setOperationLogs((current) => [...result.logs, ...current]);
+      setOperationLogs((current) => [...result.logs, ...current].slice(0, MAX_LOGS));
       setSelectedOperationIds(new Set());
       await Promise.all([loadStats(), loadFirstPage()]);
-      setStatus(t("success"));
+      showSuccess(t("success"));
     } catch (error) {
-      setStatus(readableError(error));
+      showError(readableError(error));
     }
   }
 
@@ -318,14 +333,26 @@ export function App() {
       const updatedById = new Map(result.logs.map((log) => [log.id, log]));
       setOperationLogs((current) => current.map((log) => updatedById.get(log.id) ?? log));
       await Promise.all([loadStats(), loadFirstPage()]);
-      setStatus(`${t("restored")}: ${result.restored.toLocaleString()}`);
+      showSuccess(`${t("restored")}: ${result.restored.toLocaleString()}`);
     } catch (error) {
-      setStatus(readableError(error));
+      showError(readableError(error));
     }
   }
 
-  function handleWindowAction(action: "minimize" | "maximize" | "close") {
-    if (action === "close") requestClose();
+  async function handleWindowAction(action: "minimize" | "maximize" | "close") {
+    const win = getCurrentWindow();
+    if (action === "minimize") {
+      await win.minimize();
+    } else if (action === "maximize") {
+      const isMax = await win.isMaximized();
+      if (isMax) {
+        await win.unmaximize();
+      } else {
+        await win.maximize();
+      }
+    } else {
+      requestClose();
+    }
   }
 
   function requestClose() {
@@ -334,14 +361,14 @@ export function App() {
       setIsCloseChoiceOpen(true);
       return;
     }
-    if (behavior === "quit") window.close();
+    if (behavior === "quit") getCurrentWindow().close();
     setIsCloseChoiceOpen(false);
   }
 
   async function resolveCloseChoice(action: "minimize" | "quit", remember: boolean) {
     if (remember) await setCloseBehavior(action);
     setIsCloseChoiceOpen(false);
-    if (action === "quit") window.close();
+    if (action === "quit") getCurrentWindow().close();
   }
 
   const activeLabel = nav.find((item) => item.id === view)?.label ?? t("spaceScan");
@@ -353,7 +380,7 @@ export function App() {
         ? `${t("lastScan")}: ${formatDate(stats.lastScannedAt)}`
         : t("notScannedYet");
 
-  if (isSearchMode) {
+  if (IS_SEARCH_MODE) {
     return (
       <div className="zen-app search-window">
         {isCommandOpen && (
@@ -480,65 +507,71 @@ export function App() {
             )}
           </div>
 
-          {status && <div className="system-toast">{status}</div>}
+          {toast && (
+            <div className={`system-toast system-toast--${toast.type}`}>
+              {toast.message}
+            </div>
+          )}
 
           <div className="view-stage">
-            {view === "scanner" && (
-              <ScannerView
-                stats={stats}
-                files={files}
-                selectedFolders={selectedFolders}
-                isScanning={isScanning}
-                scanProgress={scanState.progress}
-                chooseFolders={handleChooseFolders}
-                scanCommon={handleScan}
-                cancelScan={cancelScan}
-                t={t}
-              />
-            )}
-            {view === "organize" && (
-              <HubView files={files} rules={rules} onRunDispatch={runDispatch} setView={setView} t={t} />
-            )}
-            {view === "library" && (
-              <VaultView
-                page={libraryPage}
-                setPage={setLibraryPage}
-                selectedFile={selectedFile}
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                setSelectedFileId={setSelectedFileId}
-                onRefreshStats={loadStats}
-                t={t}
-              />
-            )}
-            {view === "preview" && (
-              <TimelineView
-                previews={displayPreviews}
-                selectedIds={selectedOperationIds}
-                setSelectedIds={setSelectedOperationIds}
-                onRenamePreview={(id, name) =>
-                  setPreviewNameOverrides((current) => ({ ...current, [id]: name }))
-                }
-                executeSelected={executeSelected}
-                t={t}
-              />
-            )}
-            {view === "rules" && <RulesView rules={rules} onSave={saveRule} t={t} />}
-            {view === "restore" && (
-              <RestoreView logs={operationLogs} onRestore={restoreOperationLogs} t={t} />
-            )}
-            {view === "settings" && (
-              <SettingsView
-                language={language}
-                setLanguage={setLanguage}
-                theme={theme}
-                setTheme={setTheme}
-                platform={platform}
-                closeBehavior={closeBehavior}
-                setCloseBehavior={setCloseBehavior}
-                t={t}
-              />
-            )}
+            <ViewErrorBoundary key={view}>
+              {view === "scanner" && (
+                <ScannerView
+                  stats={stats}
+                  files={files}
+                  selectedFolders={selectedFolders}
+                  isScanning={isScanning}
+                  scanProgress={scanState.progress}
+                  chooseFolders={handleChooseFolders}
+                  scanCommon={handleScan}
+                  cancelScan={cancelScan}
+                  t={t}
+                />
+              )}
+              {view === "organize" && (
+                <HubView files={files} rules={rules} onRunDispatch={runDispatch} setView={setView} t={t} />
+              )}
+              {view === "library" && (
+                <VaultView
+                  page={libraryPage}
+                  setPage={setLibraryPage}
+                  selectedFile={selectedFile}
+                  searchQuery={searchQuery}
+                  setSearchQuery={setSearchQuery}
+                  setSelectedFileId={setSelectedFileId}
+                  onRefreshStats={loadStats}
+                  t={t}
+                />
+              )}
+              {view === "preview" && (
+                <TimelineView
+                  previews={displayPreviews}
+                  selectedIds={selectedOperationIds}
+                  setSelectedIds={setSelectedOperationIds}
+                  onRenamePreview={(id, name) =>
+                    setPreviewNameOverrides((current) => ({ ...current, [id]: name }))
+                  }
+                  executeSelected={executeSelected}
+                  t={t}
+                />
+              )}
+              {view === "rules" && <RulesView rules={rules} onSave={saveRule} t={t} />}
+              {view === "restore" && (
+                <RestoreView logs={operationLogs} onRestore={restoreOperationLogs} t={t} />
+              )}
+              {view === "settings" && (
+                <SettingsView
+                  language={language}
+                  setLanguage={setLanguage}
+                  theme={theme}
+                  setTheme={setTheme}
+                  platform={platform}
+                  closeBehavior={closeBehavior}
+                  setCloseBehavior={setCloseBehavior}
+                  t={t}
+                />
+              )}
+            </ViewErrorBoundary>
           </div>
         </main>
       </div>

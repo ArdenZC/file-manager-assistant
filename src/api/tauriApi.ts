@@ -91,6 +91,10 @@ export const tauriApi = {
     return invokeCommand<ScanSummary>("scan_directory", { path });
   },
 
+  cancelScan(): Promise<void> {
+    return invokeCommand<void>("cancel_scan");
+  },
+
   executeMoves(operations: OperationPreview[]): Promise<ExecuteOperationResult> {
     const request: ExecuteOperationRequest = { operations };
     return invokeCommand<ExecuteOperationResult>("execute_moves", { request });

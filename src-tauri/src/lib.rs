@@ -1,5 +1,6 @@
 pub mod db;
 pub mod file_ops;
+pub mod path_filter;
 pub mod scanner;
 pub mod watcher;
 
@@ -18,7 +19,8 @@ pub use file_ops::{
     RestoreMovesResult,
 };
 pub use scanner::{
-    scan_directory, ScanBatchPayload, ScanProgressPayload, ScanSummary, ScannedEntry,
+    cancel_scan, scan_directory, ScanBatchPayload, ScanCancellationToken, ScanProgressPayload,
+    ScanSummary, ScannedEntry,
 };
 pub use watcher::{setup_file_watcher, FileWatchEvent, WatcherErrorEvent, WatcherReadyEvent};
 
