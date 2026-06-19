@@ -1,18 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { CloseBehavior } from "../types/domain";
+import type { CloseBehavior } from "../types/ui";
+
+function readStoredBehavior(): CloseBehavior {
+  const saved = window.localStorage.getItem("zc-close-behavior");
+  return saved === "minimize" || saved === "quit" || saved === "ask" ? saved : "ask";
+}
 
 export function useWindowBehavior() {
+  const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(readStoredBehavior);
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
-  const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(() => {
-    const saved = window.localStorage.getItem("zc-close-behavior");
-    return saved === "minimize" || saved === "quit" || saved === "ask" ? saved : "ask";
-  });
   const closeBehaviorRef = useRef(closeBehavior);
 
-  useEffect(() => {
+  // 同步 ref（供 requestClose 使用，避免 stale closure）
+  if (closeBehaviorRef.current !== closeBehavior) {
     closeBehaviorRef.current = closeBehavior;
-  }, [closeBehavior]);
+  }
 
   const setCloseBehavior = useCallback(async (next: CloseBehavior) => {
     window.localStorage.setItem("zc-close-behavior", next);
@@ -25,7 +28,7 @@ export function useWindowBehavior() {
       setIsCloseChoiceOpen(true);
       return;
     }
-    if (behavior === "quit") getCurrentWindow().close();
+    if (behavior === "quit") void getCurrentWindow().close();
     setIsCloseChoiceOpen(false);
   }, []);
 
@@ -52,21 +55,18 @@ export function useWindowBehavior() {
     async (action: "minimize" | "quit", remember: boolean) => {
       if (remember) await setCloseBehavior(action);
       setIsCloseChoiceOpen(false);
-      if (action === "quit") getCurrentWindow().close();
+      if (action === "quit") void getCurrentWindow().close();
     },
     [setCloseBehavior]
   );
-
-  const onCancelCloseChoice = useCallback(() => {
-    setIsCloseChoiceOpen(false);
-  }, []);
 
   return {
     closeBehavior,
     setCloseBehavior,
     isCloseChoiceOpen,
+    onCancelCloseChoice: () => setIsCloseChoiceOpen(false),
     handleWindowAction,
-    resolveCloseChoice,
-    onCancelCloseChoice
+    requestClose,
+    resolveCloseChoice
   };
 }

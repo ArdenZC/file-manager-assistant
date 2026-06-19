@@ -4,23 +4,21 @@ import type { Translator } from "../types/ui";
 import { readableError } from "../utils/viewHelpers";
 import { useScanProgress } from "./useScanProgress";
 
-interface UseScanManagerOptions {
+export interface ScanManagerOptions {
   t: Translator;
   loadStats: () => Promise<void>;
-  loadFirstPage: () => Promise<void>;
-  showSuccess: (message: string) => void;
-  showError: (message: string) => void;
-  clearToast: () => void;
+  onRefreshData: () => Promise<void>;
+  onError: (message: string) => void;
+  onSuccess: (message: string) => void;
 }
 
 export function useScanManager({
   t,
   loadStats,
-  loadFirstPage,
-  showSuccess,
-  showError,
-  clearToast
-}: UseScanManagerOptions) {
+  onRefreshData,
+  onError,
+  onSuccess
+}: ScanManagerOptions) {
   const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const lastScanStatsRefreshRef = useRef(0);
@@ -36,7 +34,7 @@ export function useScanManager({
     onBatch: refreshStatsDuringScan,
     onComplete: () => {
       lastScanStatsRefreshRef.current = 0;
-      void Promise.all([loadStats(), loadFirstPage()]);
+      void onRefreshData();
     }
   });
 
@@ -48,24 +46,23 @@ export function useScanManager({
   const scanPath = useCallback(
     async (path: string) => {
       if (!path) {
-        showError(t("noFolderSelected"));
+        onError(t("noFolderSelected"));
         return;
       }
       setSelectedFolders([path]);
       setIsScanning(true);
-      clearToast();
       scanState.reset();
       try {
         const summary = await scanState.startScan(path);
-        await Promise.all([loadStats(), loadFirstPage()]);
-        showSuccess(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
+        await onRefreshData();
+        onSuccess(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
       } catch (error) {
-        showError(readableError(error));
+        onError(readableError(error));
       } finally {
         setIsScanning(false);
       }
     },
-    [clearToast, loadFirstPage, loadStats, scanState, showError, showSuccess, t]
+    [onError, onRefreshData, onSuccess, scanState, t]
   );
 
   const handleScan = useCallback(async () => {

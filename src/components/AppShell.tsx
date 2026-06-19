@@ -214,7 +214,11 @@ function Sidebar(props: AppShellProps & { nav: ReturnType<typeof navItems> }) {
           >
             <item.icon size={18} />
             <span>{item.label}</span>
-            {item.id === "preview" && props.previewActionCount > 0 && <em>{props.previewActionCount}</em>}
+            {item.id === "preview" && props.previewActionCount > 0 && (
+              <span className="nav-badge" aria-label={`${props.previewActionCount} pending`}>
+                {props.previewActionCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>

@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 use sysinfo::Disks;
@@ -59,11 +60,8 @@ struct IndexedFileRow {
 
 const CLASSIFY_BATCH_SIZE: usize = 500;
 
-const MIGRATIONS: &[(&str, &str)] = &[
-    ("0001", include_str!("migrations/0001_initial.sql")),
-    ("0002", include_str!("migrations/0002_classification.sql")),
-    ("0003", include_str!("migrations/0003_fts.sql")),
-];
+/// 当前期望的 schema 版本号，每次需要改动 schema 时 +1
+const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -501,32 +499,39 @@ impl Database {
 
     pub fn get_stats_summary(&self) -> Result<StatsSummary, DbError> {
         let conn = self.conn()?;
-        let (total_files, total_size): (i64, i64) = conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM files WHERE is_dir = 0",
+        // 一次事务内完成所有聚合，保证快照一致性
+        conn.execute_batch("BEGIN DEFERRED")?;
+        let (
+            total_files,
+            total_size,
+            large_files,
+            sensitive_files,
+            needs_confirmation,
+            last_mtime,
+        ): (i64, i64, i64, i64, i64, Option<i64>) = conn.query_row(
+            r#"
+            SELECT
+                COUNT(*)        FILTER (WHERE is_dir = 0),
+                COALESCE(SUM(size) FILTER (WHERE is_dir = 0), 0),
+                COUNT(*)        FILTER (WHERE is_dir = 0 AND size >= 104857600),
+                COUNT(*)        FILTER (WHERE is_dir = 0
+                                  AND (risk_level = 'Sensitive' OR lifecycle = 'Sensitive')),
+                COUNT(*)        FILTER (WHERE is_dir = 0 AND requires_confirmation = 1),
+                MAX(mtime)
+            FROM files
+            "#,
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            },
         )?;
-        let large_files = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND size >= ?1",
-            params![100_i64 * 1024 * 1024],
-            |row| row.get(0),
-        )?;
-        let last_mtime: Option<i64> =
-            conn.query_row("SELECT MAX(mtime) FROM files", [], |row| {
-                row.get::<_, Option<i64>>(0)
-            })?;
-
-        let sensitive_files = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND (risk_level = 'Sensitive' OR lifecycle = 'Sensitive')",
-            [],
-            |row| row.get(0),
-        )?;
-        let needs_confirmation = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND requires_confirmation = 1",
-            [],
-            |row| row.get(0),
-        )?;
-
         let mut by_type = HashMap::new();
         let mut stmt = conn.prepare(
             r#"
@@ -552,7 +557,7 @@ impl Database {
             };
             *by_type.entry(normalized_type).or_insert(0) += count;
         }
-
+        drop(stmt);
         let mut by_lifecycle = HashMap::new();
         let mut stmt = conn.prepare(
             r#"
@@ -569,9 +574,9 @@ impl Database {
             let (lifecycle, count) = row?;
             by_lifecycle.insert(lifecycle, count);
         }
-
+        drop(stmt);
+        conn.execute_batch("COMMIT")?;
         let disks = Disks::new_with_refreshed_list();
-        // 取空间最大的磁盘作为代表（通常是系统盘）
         let (disk_total, disk_free) = disks
             .iter()
             .map(|d| (d.total_space(), d.available_space()))
@@ -660,45 +665,173 @@ fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn migrate(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY);")?;
+static FTS5_CHECKED: OnceLock<()> = OnceLock::new();
 
-    for (version, sql) in MIGRATIONS {
-        let applied = conn
-            .query_row(
-                "SELECT 1 FROM schema_migrations WHERE version = ?1",
-                [version],
-                |_| Ok(true),
-            )
-            .optional()?
-            .unwrap_or(false);
-        if !applied {
-            execute_migration(conn, version, sql)?;
-            conn.execute("INSERT INTO schema_migrations VALUES (?1)", [version])?;
+fn assert_fts5_available(conn: &Connection) -> Result<(), DbError> {
+    if FTS5_CHECKED.get().is_none() {
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(value, tokenize='trigram');
+            DROP TABLE temp.fts5_probe;
+            "#,
+        )?;
+        let _ = FTS5_CHECKED.set(());
+    }
+    Ok(())
+}
+
+fn schema_version(conn: &Connection) -> Result<i32, DbError> {
+    conn.query_row("SELECT user_version FROM pragma_user_version", [], |row| {
+        row.get(0)
+    })
+    .map_err(DbError::from)
+}
+
+fn set_schema_version(conn: &Connection, version: i32) -> Result<(), DbError> {
+    // PRAGMA user_version 不支持参数绑定，用格式化字符串（整数无 SQL 注入风险）
+    conn.execute_batch(&format!("PRAGMA user_version = {version}"))
+        .map_err(DbError::from)
+}
+
+fn migrate(conn: &Connection) -> Result<(), DbError> {
+    assert_fts5_available(conn)?;
+    let version = schema_version(conn)?;
+    if version >= CURRENT_SCHEMA_VERSION {
+        return Ok(());
+    }
+    if version < 1 {
+        // 建表 + 基础索引
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS files (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                extension TEXT NOT NULL DEFAULT '',
+                size INTEGER NOT NULL DEFAULT 0,
+                mtime INTEGER NOT NULL DEFAULT 0,
+                is_dir INTEGER NOT NULL DEFAULT 0 CHECK (is_dir IN (0, 1)),
+                state_code INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+            CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
+            CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
+            CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
+            "#,
+        )?;
+        set_schema_version(conn, 1)?;
+    }
+    if version < 2 {
+        // 分类字段 + FTS + 触发器
+        execute_column_migrations(
+            conn,
+            &[
+                "ALTER TABLE files ADD COLUMN file_type TEXT NOT NULL DEFAULT 'Other';",
+                "ALTER TABLE files ADD COLUMN purpose TEXT NOT NULL DEFAULT 'Unknown';",
+                "ALTER TABLE files ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Inbox';",
+                "ALTER TABLE files ADD COLUMN context TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE files ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'Normal';",
+                "ALTER TABLE files ADD COLUMN suggested_action TEXT NOT NULL DEFAULT 'Keep';",
+                "ALTER TABLE files ADD COLUMN suggested_target_path TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE files ADD COLUMN suggested_name TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE files ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;",
+                "ALTER TABLE files ADD COLUMN classification_reason TEXT NOT NULL DEFAULT 'Indexed by Zen Canvas Tauri backend.';",
+                "ALTER TABLE files ADD COLUMN matched_rules TEXT NOT NULL DEFAULT '[]';",
+                "ALTER TABLE files ADD COLUMN requires_confirmation INTEGER NOT NULL DEFAULT 0;",
+            ],
+        )?;
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type);
+            CREATE INDEX IF NOT EXISTS idx_files_purpose ON files(purpose);
+            CREATE INDEX IF NOT EXISTS idx_files_lifecycle ON files(lifecycle);
+            CREATE INDEX IF NOT EXISTS idx_files_risk_level ON files(risk_level);
+            CREATE INDEX IF NOT EXISTS idx_files_requires_confirmation ON files(requires_confirmation);
+            "#,
+        )?;
+        ensure_trigram_fts(conn)?;
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
+                INSERT INTO files_fts(rowid, name, path) VALUES (new.rowid, new.name, new.path);
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, path)
+                VALUES('delete', old.rowid, old.name, old.path);
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, path)
+                VALUES('delete', old.rowid, old.name, old.path);
+                INSERT INTO files_fts(rowid, name, path) VALUES (new.rowid, new.name, new.path);
+            END;
+            "#,
+        )?;
+        set_schema_version(conn, 2)?;
+    }
+    if version < 3 {
+        // 新增 ctime 字段（真实创建时间）
+        execute_column_migrations(
+            conn,
+            &["ALTER TABLE files ADD COLUMN ctime INTEGER NOT NULL DEFAULT 0;"],
+        )?;
+        set_schema_version(conn, 3)?;
+    }
+    Ok(())
+}
+
+fn execute_column_migrations(conn: &Connection, statements: &[&str]) -> Result<(), DbError> {
+    for statement in statements {
+        match conn.execute_batch(statement) {
+            Ok(()) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("duplicate column name") => {}
+            Err(error) => return Err(DbError::Sqlite(error)),
         }
     }
     Ok(())
 }
 
-fn execute_migration(conn: &Connection, version: &str, sql: &str) -> Result<(), DbError> {
-    if version == "0002" {
-        for statement in sql
-            .split(';')
-            .map(str::trim)
-            .filter(|statement| !statement.is_empty())
-        {
-            match conn.execute_batch(statement) {
-                Ok(()) => {}
-                Err(rusqlite::Error::SqliteFailure(_, Some(message)))
-                    if message.contains("duplicate column name") => {}
-                Err(error) => return Err(DbError::Sqlite(error)),
-            }
-        }
+fn ensure_trigram_fts(conn: &Connection) -> Result<(), DbError> {
+    let existing_sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'files_fts'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if existing_sql
+        .as_deref()
+        .map(is_trigram_fts_definition)
+        .unwrap_or(false)
+    {
         return Ok(());
     }
 
-    conn.execute_batch(sql)?;
+    conn.execute_batch(
+        r#"
+        DROP TRIGGER IF EXISTS files_ai;
+        DROP TRIGGER IF EXISTS files_ad;
+        DROP TRIGGER IF EXISTS files_au;
+        DROP TABLE IF EXISTS files_fts;
+
+        CREATE VIRTUAL TABLE files_fts USING fts5(
+            name,
+            path,
+            content='files',
+            content_rowid='rowid',
+            tokenize='trigram'
+        );
+
+        INSERT INTO files_fts(files_fts) VALUES('rebuild');
+        "#,
+    )?;
     Ok(())
+}
+
+fn is_trigram_fts_definition(sql: &str) -> bool {
+    let normalized = sql.to_ascii_lowercase().replace(char::is_whitespace, "");
+    normalized.contains("tokenize='trigram'") || normalized.contains("tokenize=\"trigram\"")
 }
 
 fn build_fts_query(input: &str) -> Option<String> {
@@ -1901,7 +2034,7 @@ mod tests {
     ) {
         db.insert_file(InsertFileRequest {
             id: id.to_string(),
-            path: format!("C:/Users/77588/Documents/{name}"),
+            path: format!("/test/virtual/documents/{name}"),
             name: name.to_string(),
             extension: extension.to_string(),
             size,
