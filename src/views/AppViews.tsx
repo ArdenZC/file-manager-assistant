@@ -27,6 +27,21 @@ import {
   splitDisplaySize
 } from "../utils/viewHelpers";
 import { shouldVirtualizeList } from "../utils/virtualization";
+import {
+  cn,
+  emptyState,
+  glassButton,
+  glassButtonPrimary,
+  glassPanel,
+  inputSurface,
+  sectionTitle,
+  selectSurface,
+  statusToast,
+  toneClasses,
+  virtualList,
+  virtualRow as virtualRowClass,
+  virtualSpacer
+} from "../utils/tw";
 
 const LIBRARY_PAGE_SIZE = 50;
 const HUB_FILE_ROW_HEIGHT = 82;
@@ -55,6 +70,38 @@ const itemMotion: Variants = {
     transition: { type: "spring", stiffness: 280, damping: 26 }
   }
 };
+
+const pageSurface = "h-full min-h-0 overflow-auto pr-1";
+const panelSurface = cn(glassPanel, "min-h-0 p-5");
+const rowSurface =
+  "rounded-2xl border border-[var(--line)] bg-white/30 p-3 text-left shadow-sm transition dark:bg-white/5";
+const compactRowSurface =
+  "rounded-xl border border-[var(--line)] bg-white/30 px-3 py-2 text-left transition dark:bg-white/5";
+const mutedText = "text-sm text-[var(--muted)]";
+const quietText = "text-xs text-[var(--quiet)]";
+const formGrid = "grid grid-cols-2 gap-3 [&_label]:grid [&_label]:gap-1.5 [&_label]:text-sm [&_label]:font-medium [&_label]:text-[var(--muted)]";
+const segmented = "inline-flex items-center gap-1 rounded-xl border border-[var(--line)] bg-white/25 p-1 dark:bg-white/5";
+
+function segmentButton(active: boolean): string {
+  return cn(
+    "rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] transition hover:bg-white/50 hover:text-[var(--ink)] dark:hover:bg-white/10",
+    active && "bg-blue-500 text-white shadow-sm hover:bg-blue-500 hover:text-white"
+  );
+}
+
+function toggleSwitch(on: boolean): string {
+  return cn(
+    "relative h-7 w-12 rounded-full border border-[var(--line)] bg-slate-300/50 transition dark:bg-white/10 [&_i]:absolute [&_i]:left-1 [&_i]:top-1 [&_i]:h-5 [&_i]:w-5 [&_i]:rounded-full [&_i]:bg-white [&_i]:shadow-sm [&_i]:transition",
+    on && "bg-blue-500 [&_i]:translate-x-5"
+  );
+}
+
+function sourceBadge(source: string): string {
+  return cn(
+    "rounded-full border px-2 py-1 text-xs font-medium",
+    source === "user" || source === "user_space" ? toneClasses("green") : toneClasses("blue")
+  );
+}
 
 export function ScannerView({
   stats,
@@ -89,26 +136,31 @@ export function ScannerView({
   const analysedSize = splitDisplaySize(formatBytes(scopedTotalSize));
 
   return (
-    <div className="scanner-stage scanner-demo-stage page-enter">
-      <section className="scanner-demo-radar-wrap">
+    <div className={cn(pageSurface, "grid place-items-center gap-5 py-6 text-center")}>
+      <section className="relative">
         <div
-          className={`radar-chart ${isScanning ? "is-running scanner-glow" : ""}`}
-          style={{ "--scan-percent": `${Math.round(diskUsageRatio * 100)}%` } as React.CSSProperties}
+          className={cn(
+            "grid h-72 w-72 place-items-center rounded-full p-4 shadow-[var(--shadow-strong)]",
+            isScanning && "animate-pulse"
+          )}
+          style={{
+            background: `conic-gradient(#3b82f6 0 ${Math.round(diskUsageRatio * 100)}%, rgba(59,130,246,0.10) ${Math.round(diskUsageRatio * 100)}% 100%)`
+          } as CSSProperties}
         >
-          <div className="radar-inner">
+          <div className="grid h-full w-full place-items-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-8 backdrop-blur-3xl">
             {isScanning ? (
-              <div className="scanner-pulse-state">
+              <div className="text-sm font-medium text-blue-600 dark:text-blue-300">
                 <span>{t("scanning")}...</span>
               </div>
             ) : (
               <>
-                <span className="scanner-kicker">{t("totalAnalysed")}</span>
-                <strong className="scanner-total">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--quiet)]">{t("totalAnalysed")}</span>
+                <strong className="mt-2 block text-5xl font-semibold">
                   {analysedSize.value}
-                  <span>{analysedSize.unit}</span>
+                  <span className="ml-1 text-base text-[var(--muted)]">{analysedSize.unit}</span>
                 </strong>
-                <div className="scanner-ready-pill">
-                  <i />
+                <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-white/40 px-3 py-1 text-sm text-[var(--muted)] dark:bg-white/5">
+                  <i className="h-2 w-2 rounded-full bg-emerald-500" />
                   <span>{percent(diskUsageRatio)}</span>
                 </div>
               </>
@@ -117,37 +169,37 @@ export function ScannerView({
         </div>
       </section>
 
-      <section className="metric-strip scanner-demo-metrics">
-        <div className="metric-card blue">
-          <span>{t("files")}</span>
-          <strong>{stats.totalFiles.toLocaleString()}</strong>
+      <section className="grid w-full max-w-lg grid-cols-2 gap-3">
+        <div className={cn(panelSurface, "p-4 text-left")}>
+          <span className={quietText}>{t("files")}</span>
+          <strong className="mt-1 block text-2xl text-blue-600 dark:text-blue-300">{stats.totalFiles.toLocaleString()}</strong>
         </div>
-        <div className="metric-card red">
-          <span>{t("clutterRatio")}</span>
-          <strong>{percent(clutterRatio)}</strong>
+        <div className={cn(panelSurface, "p-4 text-left")}>
+          <span className={quietText}>{t("clutterRatio")}</span>
+          <strong className="mt-1 block text-2xl text-red-600 dark:text-red-300">{percent(clutterRatio)}</strong>
         </div>
       </section>
 
-      <section className="scanner-actions scanner-demo-actions">
-        <button className="glass-button scanner-demo-primary" onClick={scanCommon} disabled={isScanning}>
+      <section className="flex items-center justify-center gap-3">
+        <button className={glassButtonPrimary} onClick={scanCommon} disabled={isScanning}>
           <RefreshCw size={18} />
           <span>{isScanning ? t("scanning") : t("scanCommon")}</span>
         </button>
         {isScanning ? (
-          <button className="glass-button scanner-demo-secondary" onClick={cancelScan}>
+          <button className={glassButton} onClick={cancelScan}>
             <X size={18} />
             <span>{t("cancelScan")}</span>
           </button>
         ) : (
-          <button className="glass-button scanner-demo-secondary" onClick={chooseFolders}>
+          <button className={glassButton} onClick={chooseFolders}>
             <FolderSearch size={18} />
             <span>{t("chooseFolders")}</span>
           </button>
         )}
       </section>
 
-      <p className="scanner-scope-text">{scopeLabel}</p>
-      <p className="scanner-scope-text scanner-detail-text">
+      <p className="max-w-xl text-sm font-medium text-[var(--ink)]">{scopeLabel}</p>
+      <p className="max-w-2xl text-sm text-[var(--muted)]">
         {isScanning && scanProgress
           ? t("scanProgressLine")
               .replace("{files}", scanProgress.files.toLocaleString())
@@ -203,16 +255,16 @@ export function HubView({
   }
 
   return (
-    <div className="hub-layout page-enter">
-      <section className="glass-panel hub-inbox">
-        <div className="hub-panel-head">
-          <h2>{t("inboxStack")}</h2>
-          <span>{pendingFiles.length} {t("items")}</span>
+    <div className="grid h-full min-h-0 grid-cols-[minmax(300px,0.8fr)_minmax(0,1.4fr)] gap-4 overflow-hidden">
+      <section className={cn(panelSurface, "flex flex-col gap-4 overflow-hidden")}>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">{t("inboxStack")}</h2>
+          <span className={mutedText}>{pendingFiles.length} {t("items")}</span>
         </div>
         <VirtualFileCardList files={pendingFiles} t={t} />
         <motion.button
           whileTap={{ scale: 0.985 }}
-          className="hub-dispatch-button"
+          className={cn(glassButtonPrimary, "w-full")}
           onClick={runDispatch}
           disabled={isDispatching || !files.length}
           title={`${activeRuleCount} active rules`}
@@ -221,22 +273,22 @@ export function HubView({
         </motion.button>
       </section>
 
-      <motion.section className="hub-target-grid" variants={listMotion} initial="hidden" animate="show">
+      <motion.section className="grid min-h-0 grid-cols-2 gap-4 overflow-auto pr-1" variants={listMotion} initial="hidden" animate="show">
         {buckets.map((bucket) => {
           const bucketFiles = sortedFiles.filter((file) => fileBucket(file) === bucket.key);
           return (
             <motion.div
-              className={`glass-panel target-bucket ${bucket.tone} ${bucketFiles.length ? "has-files" : ""}`}
+              className={cn(panelSurface, "flex min-h-[240px] flex-col gap-3", bucketFiles.length > 0 && "ring-1 ring-blue-400/20")}
               key={bucket.key}
               variants={itemMotion}
               layout
             >
-              <div className="bucket-head">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3>{bucket.label}</h3>
-                  <small>{bucket.description}</small>
+                  <h3 className="text-base font-semibold">{bucket.label}</h3>
+                  <small className={mutedText}>{bucket.description}</small>
                 </div>
-                <span>{bucketFiles.length}</span>
+                <span className={cn("rounded-full border px-2 py-1 text-xs font-semibold", toneClasses(bucket.tone))}>{bucketFiles.length}</span>
               </div>
               <VirtualBucketFileList files={bucketFiles} setView={setView} waitingLabel={t("waitingFlow")} />
             </motion.div>
@@ -259,8 +311,8 @@ function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator 
 
   if (!files.length) {
     return (
-      <div className="hub-inbox-list">
-        <div className="hub-empty">
+      <div className="min-h-0 flex-1">
+        <div className={cn(emptyState, "h-full")}>
           <Check size={24} />
           <span>{t("dispatchClear")}</span>
         </div>
@@ -270,7 +322,7 @@ function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator 
 
   if (!shouldVirtualize) {
     return (
-      <motion.div className="hub-inbox-list" variants={listMotion} initial="hidden" animate="show">
+      <motion.div className="grid min-h-0 flex-1 gap-3 overflow-auto pr-1" variants={listMotion} initial="hidden" animate="show">
         {files.map((file, index) => (
           <FileCard key={file.id} file={file} index={index} t={t} compact />
         ))}
@@ -279,20 +331,20 @@ function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator 
   }
 
   return (
-    <div ref={parentRef} className="hub-inbox-list virtual-list">
-      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+    <div ref={parentRef} className={cn("min-h-0 flex-1", virtualList)}>
+      <div className={virtualSpacer} style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
           const file = files[virtualRow.index];
           return (
             <div
-              className="virtual-row"
+              className={virtualRowClass}
               key={file.id}
               style={{
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`
               }}
             >
-              <FileCard file={file} index={virtualRow.index} t={t} compact />
+              <FileCard file={file} index={virtualRow.index} t={t} compact disableAnimation />
             </div>
           );
         })}
@@ -321,7 +373,7 @@ function VirtualBucketFileList({
 
   if (!files.length) {
     return (
-      <div className="bucket-dropzone">
+      <div className={cn(emptyState, "min-h-32")}>
         <span>{waitingLabel}</span>
       </div>
     );
@@ -329,7 +381,7 @@ function VirtualBucketFileList({
 
   if (!shouldVirtualize) {
     return (
-      <motion.div className="bucket-dropzone" variants={listMotion} initial="hidden" animate="show">
+      <motion.div className="grid gap-2" variants={listMotion} initial="hidden" animate="show">
         {files.map((file) => (
           <BucketFileButton file={file} key={file.id} setView={setView} />
         ))}
@@ -338,20 +390,20 @@ function VirtualBucketFileList({
   }
 
   return (
-    <div ref={parentRef} className="bucket-dropzone virtual-list">
-      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+    <div ref={parentRef} className={cn("min-h-32", virtualList)}>
+      <div className={virtualSpacer} style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
           const file = files[virtualRow.index];
           return (
             <div
-              className="virtual-row"
+              className={virtualRowClass}
               key={file.id}
               style={{
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`
               }}
             >
-              <BucketFileButton file={file} setView={setView} />
+              <BucketFileButton file={file} setView={setView} disableAnimation />
             </div>
           );
         })}
@@ -360,11 +412,26 @@ function VirtualBucketFileList({
   );
 }
 
-function BucketFileButton({ file, setView }: { file: FileRecord; setView: (view: View) => void }) {
+function BucketFileButton({
+  file,
+  setView,
+  disableAnimation = false
+}: {
+  file: FileRecord;
+  setView: (view: View) => void;
+  disableAnimation?: boolean;
+}) {
   return (
-    <motion.button className="bucket-file item-pop" layout variants={itemMotion} onClick={() => setView("preview")}>
+    <motion.button
+      className={cn(compactRowSurface, "flex w-full items-center gap-2 overflow-hidden text-sm hover:bg-white/50 dark:hover:bg-white/10")}
+      layout={!disableAnimation}
+      variants={disableAnimation ? undefined : itemMotion}
+      initial={disableAnimation ? false : undefined}
+      animate={disableAnimation ? false : undefined}
+      onClick={() => setView("preview")}
+    >
       <File size={15} />
-      <span>{file.name}</span>
+      <span className="truncate">{file.name}</span>
     </motion.button>
   );
 }
@@ -446,48 +513,55 @@ export function VaultView({
   ];
 
   return (
-    <div className="vault-layout page-enter">
-      <div className="vault-chip-row">
+    <div className={cn(pageSurface, "space-y-4")}>
+      <div className="flex flex-wrap gap-2">
         {filters.map((filter) => (
           <button
             key={filter.label}
-            className={searchQuery === filter.key ? "active" : ""}
+            className={segmentButton(searchQuery === filter.key)}
             onClick={() => setSearchQuery(filter.key)}
           >
             {filter.label}
           </button>
         ))}
       </div>
-      <div className="vault-filter-guide">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {filters.map((filter) => (
-          <span className={searchQuery === filter.key ? "active" : ""} key={`${filter.key}-description`}>
-            <strong>{filter.label}</strong>
+          <span
+            className={cn(
+              "rounded-2xl border border-[var(--line)] bg-white/25 p-3 text-sm text-[var(--muted)] dark:bg-white/5",
+              searchQuery === filter.key && "border-blue-400/50 bg-blue-500/10 text-[var(--ink)]"
+            )}
+            key={`${filter.key}-description`}
+          >
+            <strong className="mb-1 block text-[var(--ink)]">{filter.label}</strong>
             {filter.description}
           </span>
         ))}
       </div>
-      <p className="vault-helper">{t("libraryIntro")}</p>
-      <label className="library-search-inline">
+      <p className={mutedText}>{t("libraryIntro")}</p>
+      <label className={cn(inputSurface, "flex items-center gap-2 px-3")}>
         <Search size={16} />
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           placeholder={t("librarySearchPlaceholder")}
+          className="min-w-0 flex-1 bg-transparent outline-none"
         />
       </label>
-      <div className="vault-count-line">
+      <div className="flex items-center justify-between gap-3 text-sm text-[var(--muted)]">
         <span>{t("libraryShowing").replace("{visible}", String(page.files.length)).replace("{total}", String(page.total))}</span>
-        {isLoading && <em>{t("loading")}</em>}
+        {isLoading && <em className="not-italic">{t("loading")}</em>}
       </div>
-      {error && <div className="system-toast inline">{error}</div>}
+      {error && <div className={cn(statusToast, "mt-0")}>{error}</div>}
       <VirtualAssetGrid
         files={page.files}
         selectedFileId={selectedFile?.id}
         setSelectedFileId={setSelectedFileId}
       />
-      <div ref={sentinelRef} className="vault-load-sentinel" />
+      <div ref={sentinelRef} className="h-1" />
       {hasMore && (
-        <button className="glass-button vault-load-more" onClick={() => void loadPage(page.files.length, true)} disabled={isLoading}>
+        <button className={cn(glassButton, "mx-auto flex")} onClick={() => void loadPage(page.files.length, true)} disabled={isLoading}>
           <Plus size={16} />
           {t("loadMoreFiles").replace("{count}", String(Math.min(page.limit, page.total - page.files.length)))}
         </button>
@@ -530,7 +604,7 @@ function VirtualAssetGrid({
 
   if (!shouldVirtualize) {
     return (
-      <motion.section className="vault-grid" variants={listMotion} initial="hidden" animate="show">
+      <motion.section className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3" variants={listMotion} initial="hidden" animate="show">
         {files.map((file) => (
           <AssetCard
             file={file}
@@ -544,14 +618,14 @@ function VirtualAssetGrid({
   }
 
   return (
-    <section ref={parentRef} className="vault-grid-virtual virtual-list">
-      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+    <section ref={parentRef} className={cn("h-[calc(100vh-330px)] min-h-80", virtualList)}>
+      <div className={virtualSpacer} style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
           const start = virtualRow.index * columns;
           const rowFiles = files.slice(start, start + columns);
           return (
             <div
-              className="vault-virtual-row"
+              className="absolute left-0 top-0 grid w-full gap-3"
               key={virtualRow.key}
               style={{
                 gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
@@ -586,20 +660,24 @@ const AssetCard = memo(function AssetCard({
 }) {
   return (
     <motion.button
-      className={`asset-card glass-panel ${isSelected ? "selected" : ""}`}
+      className={cn(
+        panelSurface,
+        "grid min-h-52 gap-3 p-4 text-left transition hover:-translate-y-0.5 hover:bg-white/40 dark:hover:bg-white/10",
+        isSelected && "ring-2 ring-blue-400/60"
+      )}
       layout
       variants={itemMotion}
       onClick={() => setSelectedFileId(file.id)}
     >
-      <div className={`asset-icon ${file.risk_level === "Sensitive" ? "red" : file.lifecycle === "Archive" ? "purple" : "blue"}`}>
+      <div className={cn("grid h-12 w-12 place-items-center rounded-2xl border", toneClasses(file.risk_level === "Sensitive" ? "red" : file.lifecycle === "Archive" ? "purple" : "blue"))}>
         <File size={24} />
       </div>
-      <h3>{file.name}</h3>
-      <div className="asset-meta">
+      <h3 className="line-clamp-2 text-base font-semibold">{file.name}</h3>
+      <div className="flex items-center justify-between gap-2 text-sm text-[var(--muted)]">
         <span>{file.lifecycle}</span>
         <strong>{formatBytes(file.size)}</strong>
       </div>
-      <small>{file.directory || file.path}</small>
+      <small className="truncate text-xs text-[var(--quiet)]">{file.directory || file.path}</small>
     </motion.button>
   );
 });
@@ -633,33 +711,33 @@ export function TimelineView({
   const blockedCount = previews.length - executableCount;
 
   return (
-    <div className="timeline-layout page-enter">
-      <section className="glass-panel preview-panel">
-        <div className="section-title action-title">
+    <div className={pageSurface}>
+      <section className={panelSurface}>
+        <div className={cn(sectionTitle, "items-center")}>
           <div>
             <h2>{t("suggestedPlan")}</h2>
             <p>{t("previewBeforeExecute")}</p>
           </div>
-          <button className="glass-button primary" onClick={executeSelected} disabled={!selectedIds.size}>
+          <button className={glassButtonPrimary} onClick={executeSelected} disabled={!selectedIds.size}>
             <Play size={16} />
             <span>{t("executeSelected")} / {selectedIds.size}</span>
           </button>
         </div>
-        <div className="preview-summary-strip">
+        <div className="mb-4 grid gap-2 text-sm text-[var(--muted)] sm:grid-cols-3">
           <span>{t("previewMainFolders")}: <strong>{groups.length}</strong></span>
           <span>{t("executableItems")}: <strong>{executableCount}</strong></span>
           <span>{t("blockedItems")}: <strong>{blockedCount}</strong></span>
         </div>
         {!previews.length ? (
-          <div className="empty-state">{t("noOperations")}</div>
+          <div className={emptyState}>{t("noOperations")}</div>
         ) : (
-          <div className="preview-folder-grid">
+          <div className="grid gap-4">
             {groups.map((group) => {
               const executable = group.items.filter((item) => item.is_executable !== false);
               const allSelected = executable.length > 0 && executable.every((item) => selectedIds.has(item.id));
               return (
-                <section className="preview-folder-card preview-main-folder-card" key={group.key}>
-                  <label className="preview-folder-head">
+                <section className={cn(rowSurface, "grid gap-3 p-4")} key={group.key}>
+                  <label className="grid cursor-pointer grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-3">
                     <input
                       type="checkbox"
                       checked={allSelected}
@@ -675,21 +753,21 @@ export function TimelineView({
                     />
                     <Folder size={20} />
                     <div>
-                      <strong>{group.name}</strong>
-                      <span>{group.path}</span>
+                      <strong className="block text-sm">{group.name}</strong>
+                      <span className="block truncate text-xs text-[var(--muted)]">{group.path}</span>
                     </div>
-                    <em>{group.items.length}</em>
+                    <em className="rounded-full border border-[var(--line)] px-2 py-1 text-xs not-italic text-[var(--muted)]">{group.items.length}</em>
                   </label>
-                  <div className="preview-subfolder-list">
+                  <div className="grid gap-3">
                     {group.subgroups.map((subgroup) => (
-                      <section className="preview-subfolder" key={`${group.key}-${subgroup.key}`}>
-                        <div className="preview-subfolder-head">
+                      <section className="rounded-2xl border border-[var(--line-dark)] bg-white/20 p-3 dark:bg-white/5" key={`${group.key}-${subgroup.key}`}>
+                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 pb-2">
                           <Folder size={16} />
                           <div>
-                            <strong>{subgroup.name}</strong>
-                            <span>{subgroup.path}</span>
+                            <strong className="block text-sm">{subgroup.name}</strong>
+                            <span className="block truncate text-xs text-[var(--muted)]">{subgroup.path}</span>
                           </div>
-                          <em>{subgroup.items.length}</em>
+                          <em className="text-xs not-italic text-[var(--muted)]">{subgroup.items.length}</em>
                         </div>
                         <VirtualPreviewFileRows
                           previews={subgroup.items}
@@ -735,7 +813,7 @@ function VirtualPreviewFileRows({
 
   if (!shouldVirtualize) {
     return (
-      <motion.div className="preview-folder-files compact" variants={listMotion} initial="hidden" animate="show">
+      <motion.div className="grid gap-2" variants={listMotion} initial="hidden" animate="show">
         {previews.map((preview) => (
           <PreviewFileRow
             key={preview.id}
@@ -751,13 +829,13 @@ function VirtualPreviewFileRows({
   }
 
   return (
-    <div ref={parentRef} className="preview-folder-files compact virtualized virtual-list">
-      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+    <div ref={parentRef} className={cn("max-h-96", virtualList)}>
+      <div className={virtualSpacer} style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
           const preview = previews[virtualRow.index];
           return (
             <div
-              className="virtual-row preview-virtual-row"
+              className={virtualRowClass}
               key={preview.id}
               style={{
                 height: `${virtualRow.size}px`,
@@ -793,7 +871,7 @@ const PreviewFileRow = memo(function PreviewFileRow({
   t: Translator;
 }) {
   return (
-    <motion.div className="preview-file-row" layout variants={itemMotion}>
+    <motion.div className={cn(compactRowSurface, "grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-3")} layout variants={itemMotion}>
       <input
         type="checkbox"
         disabled={preview.is_executable === false}
@@ -801,13 +879,13 @@ const PreviewFileRow = memo(function PreviewFileRow({
         onChange={() => toggle(preview.id)}
       />
       <File size={15} />
-      <div>
-        <strong>{preview.old_name}</strong>
-        <span>{preview.operation_type} / {percent(preview.confidence)}</span>
-        <code className="preview-path-line" title={preview.source_path}>{preview.source_path}</code>
-        <code className="preview-path-line target" title={preview.target_path}>{preview.target_path}</code>
+      <div className="min-w-0">
+        <strong className="block truncate text-sm">{preview.old_name}</strong>
+        <span className="block text-xs text-[var(--muted)]">{preview.operation_type} / {percent(preview.confidence)}</span>
+        <code className="mt-1 block truncate rounded bg-slate-500/10 px-2 py-1 text-[11px] text-[var(--muted)]" title={preview.source_path}>{preview.source_path}</code>
+        <code className="mt-1 block truncate rounded bg-blue-500/10 px-2 py-1 text-[11px] text-blue-600 dark:text-blue-300" title={preview.target_path}>{preview.target_path}</code>
         <input
-          className="inline-name-input"
+          className={cn(inputSurface, "mt-2 w-full")}
           value={preview.new_name}
           disabled={!preview.editable_new_name || preview.is_executable === false}
           onChange={(event) => onRenamePreview(preview.id, event.target.value)}
@@ -860,32 +938,32 @@ export function RulesView({ rules, onSave, t }: { rules: Rule[]; onSave: (rule: 
   }
 
   return (
-    <div className="rules-layout page-enter">
-      <section className="glass-panel rule-builder">
+    <div className={cn(pageSurface, "grid grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] gap-4 overflow-hidden")}>
+      <section className={panelSurface}>
         <SectionTitle title={t("ruleBuilder")} body={t("customDesc")} />
-        <div className="rule-sentence">
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--line)] bg-white/25 p-3 text-sm dark:bg-white/5">
           <span>{t("whenFile")}</span>
-          <strong>{field}</strong>
-          <strong>{operator}</strong>
-          <input value={value} onChange={(event) => setValue(event.target.value)} />
+          <strong className="rounded-full bg-blue-500/10 px-2 py-1 text-blue-600 dark:text-blue-300">{field}</strong>
+          <strong className="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-300">{operator}</strong>
+          <input className={cn(inputSurface, "min-h-8 w-40")} value={value} onChange={(event) => setValue(event.target.value)} />
           <span>{t("thenSendTo")}</span>
-          <strong>{purpose}</strong>
+          <strong className="rounded-full bg-violet-500/10 px-2 py-1 text-violet-600 dark:text-violet-300">{purpose}</strong>
         </div>
-        <div className="form-grid">
-          <label>{t("ruleName")}<input value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label>{t("field")}<select value={field} onChange={(event) => setField(event.target.value)}>{["name", "extension", "file_type", "path", "directory", "size", "modified_at", "risk_level"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("operator")}<select value={operator} onChange={(event) => setOperator(event.target.value)}>{["contains", "equals", "startsWith", "endsWith", "greaterThan", "lessThan", "olderThanDays", "newerThanDays"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("purpose")}<select value={purpose} onChange={(event) => setPurpose(event.target.value)}>{["Temporary", "Career", "Finance", "Study", "Project", "Personal", "Media", "Unknown"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("lifecycle")}<select value={lifecycle} onChange={(event) => setLifecycle(event.target.value)}>{["Inbox", "Active", "Reference", "Archive", "Disposable", "Sensitive"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("weight")}<input type="number" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
+        <div className={formGrid}>
+          <label>{t("ruleName")}<input className={inputSurface} value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>{t("field")}<select className={selectSurface} value={field} onChange={(event) => setField(event.target.value)}>{["name", "extension", "file_type", "path", "directory", "size", "modified_at", "risk_level"].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>{t("operator")}<select className={selectSurface} value={operator} onChange={(event) => setOperator(event.target.value)}>{["contains", "equals", "startsWith", "endsWith", "greaterThan", "lessThan", "olderThanDays", "newerThanDays"].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>{t("purpose")}<select className={selectSurface} value={purpose} onChange={(event) => setPurpose(event.target.value)}>{["Temporary", "Career", "Finance", "Study", "Project", "Personal", "Media", "Unknown"].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>{t("lifecycle")}<select className={selectSurface} value={lifecycle} onChange={(event) => setLifecycle(event.target.value)}>{["Inbox", "Active", "Reference", "Archive", "Disposable", "Sensitive"].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>{t("weight")}<input className={inputSurface} type="number" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
         </div>
-        <button className="primary-command compact-command" onClick={submit}>
+        <button className={cn(glassButtonPrimary, "mt-4")} onClick={submit}>
           <Plus size={17} />
           {t("saveRule")}
         </button>
       </section>
 
-      <section className="glass-panel rules-list-panel">
+      <section className={cn(panelSurface, "overflow-hidden")}>
         <SectionTitle title={t("strategy")} body={t("ruleLayerDesc")} />
         <VirtualRuleList rules={rules} />
       </section>
@@ -905,7 +983,7 @@ function VirtualRuleList({ rules }: { rules: Rule[] }) {
 
   if (!shouldVirtualize) {
     return (
-      <motion.div className="rule-list" variants={listMotion} initial="hidden" animate="show">
+      <motion.div className="grid gap-2" variants={listMotion} initial="hidden" animate="show">
         {rules.map((rule) => (
           <RuleRow key={rule.id} rule={rule} />
         ))}
@@ -914,13 +992,13 @@ function VirtualRuleList({ rules }: { rules: Rule[] }) {
   }
 
   return (
-    <div ref={parentRef} className="rule-list virtual-list rules-virtual-list">
-      <div className="virtual-list-spacer" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+    <div ref={parentRef} className={cn("h-[calc(100vh-260px)]", virtualList)}>
+      <div className={virtualSpacer} style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
           const rule = rules[virtualRow.index];
           return (
             <div
-              className="virtual-row"
+              className={virtualRowClass}
               key={rule.id}
               style={{
                 height: `${virtualRow.size}px`,
@@ -938,13 +1016,13 @@ function VirtualRuleList({ rules }: { rules: Rule[] }) {
 
 const RuleRow = memo(function RuleRow({ rule }: { rule: Rule }) {
   return (
-    <motion.div className="rule-row" layout variants={itemMotion}>
+    <motion.div className={cn(compactRowSurface, "grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3")} layout variants={itemMotion}>
       <div>
-        <strong>{rule.name}</strong>
-        <span>{rule.source} / weight {rule.weight} / priority {rule.priority}</span>
+        <strong className="block truncate text-sm">{rule.name}</strong>
+        <span className="block text-xs text-[var(--muted)]">{rule.source} / weight {rule.weight} / priority {rule.priority}</span>
       </div>
-      <span className={`source ${rule.source}`}>{rule.source}</span>
-      <span className={`toggle-switch ${rule.enabled ? "on" : ""}`} aria-hidden="true"><i /></span>
+      <span className={sourceBadge(rule.source)}>{rule.source}</span>
+      <span className={toggleSwitch(rule.enabled)} aria-hidden="true"><i /></span>
     </motion.div>
   );
 });
@@ -989,24 +1067,28 @@ export function RestoreView({
   }
 
   return (
-    <div className="restore-layout page-enter">
-      <section className="glass-panel restore-batches">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)] gap-4 overflow-hidden">
+      <section className={cn(panelSurface, "overflow-auto")}>
         <SectionTitle title={t("restoreRecords")} body={t("restoreDesc")} />
         {batches.length ? (
-          <div className="restore-preview-list">
+          <div className="grid gap-2">
             {batches.map((batch) => (
               <button
-                className={`restore-preview-card restore-batch-card ${batch.batchId === selectedBatch?.batchId ? "ok" : ""}`}
+                className={cn(
+                  rowSurface,
+                  "w-full",
+                  batch.batchId === selectedBatch?.batchId && "border-blue-400/60 bg-blue-500/10"
+                )}
                 key={batch.batchId}
                 onClick={() => setSelectedBatchId(batch.batchId)}
               >
-                <div className="restore-preview-status">
+                <div className="mb-2 flex items-center gap-2 text-sm">
                   <RotateCcw size={16} />
                   <strong>{formatLogDate(batch.createdAt)}</strong>
                 </div>
-                <div className="restore-preview-body">
-                  <strong>{batch.total} {t("items")} / {batch.restorable} {t("restorable")}</strong>
-                  <small>
+                <div>
+                  <strong className="block text-sm">{batch.total} {t("items")} / {batch.restorable} {t("restorable")}</strong>
+                  <small className={mutedText}>
                     {t("success")}: {batch.success} · {t("failed")}: {batch.failed} · {t("restored")}: {batch.restored}
                   </small>
                 </div>
@@ -1014,35 +1096,35 @@ export function RestoreView({
             ))}
           </div>
         ) : (
-          <div className="empty-state">{t("noRestoreRecords")}</div>
+          <div className={emptyState}>{t("noRestoreRecords")}</div>
         )}
-        <div className="restore-log-divider" />
+        <div className="my-5 h-px bg-[var(--line-dark)]" />
         <SectionTitle title={t("operationHistory")} body={t("timeMachineDesc")} />
         {historyLogs.length ? (
-          <div className="restore-operation-log">
+          <div className="grid gap-2">
             {historyLogs.map((log) => (
-              <div className="operation-row restore-item" key={log.id}>
-                <span className={`status-dot ${log.status === "success" ? "ok" : ""}`} />
+              <div className={cn(compactRowSurface, "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3")} key={log.id}>
+                <span className={cn("h-2.5 w-2.5 rounded-full", log.status === "success" ? "bg-emerald-500" : "bg-red-500")} />
                 <div>
-                  <strong>{log.new_name || log.old_name}</strong>
-                  <span>{log.operation_type} · {formatLogDate(log.created_at)}</span>
+                  <strong className="block truncate text-sm">{log.new_name || log.old_name}</strong>
+                  <span className="block text-xs text-[var(--muted)]">{log.operation_type} · {formatLogDate(log.created_at)}</span>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="empty-state compact">{t("noOperationHistory")}</div>
+          <div className={cn(emptyState, "min-h-20")}>{t("noOperationHistory")}</div>
         )}
       </section>
 
-      <section className="glass-panel restore-preview">
-        <div className="section-title action-title">
+      <section className={cn(panelSurface, "overflow-auto")}>
+        <div className={cn(sectionTitle, "items-center")}>
           <div>
             <h2>{t("restorePreview")}</h2>
             <p>{t("restorePreviewDesc")}</p>
           </div>
           <button
-            className="glass-button primary"
+            className={glassButtonPrimary}
             disabled={!restorableLogs.length || isRestoring}
             onClick={restoreSelectedBatch}
           >
@@ -1051,24 +1133,24 @@ export function RestoreView({
           </button>
         </div>
         {selectedBatch ? (
-          <div className="restore-preview-list">
+          <div className="grid gap-2">
             {selectedBatch.logs.map((log) => {
               const isRestorable = isRestorableLog(log);
               return (
-                <div className={`restore-preview-card ${isRestorable ? "ok" : "blocked"}`} key={log.id}>
-                  <div className="restore-preview-status">
+                <div className={cn(rowSurface, isRestorable ? "border-emerald-400/40 bg-emerald-500/10" : "border-slate-400/20 opacity-80")} key={log.id}>
+                  <div className="mb-2 flex items-center gap-2 text-sm">
                     {isRestorable ? <Check size={15} /> : <X size={15} />}
                     <strong>{restoreStatusLabel(log, t)}</strong>
                   </div>
-                  <div className="restore-preview-body">
-                    <strong>{log.new_name || log.old_name}</strong>
-                    <div className="restore-path-pair">
+                  <div>
+                    <strong className="block truncate text-sm">{log.new_name || log.old_name}</strong>
+                    <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-[var(--muted)]">
                       <span title={log.path_after}>{compactPath(log.path_after, 48)}</span>
                       <ChevronRight size={14} />
                       <span title={log.path_before}>{compactPath(log.path_before, 48)}</span>
                     </div>
                     {(log.restore_error || log.error_message) && (
-                      <small>{log.restore_error || log.error_message}</small>
+                      <small className="mt-2 block text-xs text-red-500">{log.restore_error || log.error_message}</small>
                     )}
                   </div>
                 </div>
@@ -1076,7 +1158,7 @@ export function RestoreView({
             })}
           </div>
         ) : (
-          <div className="empty-state compact">{t("noRestorePreview")}</div>
+          <div className={cn(emptyState, "min-h-20")}>{t("noRestorePreview")}</div>
         )}
       </section>
     </div>
@@ -1195,112 +1277,134 @@ export function SettingsView({
   }
 
   return (
-    <div className="settings-layout page-enter">
-      <section className="glass-panel settings-panel">
+    <div className={cn(pageSurface, "grid grid-cols-[minmax(0,1fr)_minmax(300px,0.7fr)] gap-4 overflow-hidden")}>
+      <section className={cn(panelSurface, "overflow-auto")}>
         <SectionTitle title={t("settings")} body={t("settingsDesc")} />
-        <div className="setting-row">
-          <div><strong>{t("language")}</strong><span>{t("languageDesc")}</span></div>
-          <div className="segmented compact">
-            <button className={language === "zh" ? "active" : ""} onClick={() => setLanguage("zh")}>中文</button>
-            <button className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")}>English</button>
+        <div className="grid gap-3">
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("language")}</strong><span className={mutedText}>{t("languageDesc")}</span></div>
+          <div className={segmented}>
+            <button className={segmentButton(language === "zh")} onClick={() => setLanguage("zh")}>中文</button>
+            <button className={segmentButton(language === "en")} onClick={() => setLanguage("en")}>English</button>
           </div>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("appearance")}</strong><span>{t("appearanceDesc")}</span></div>
-          <div className="segmented compact tri">
-            <button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>{t("lightTheme")}</button>
-            <button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>{t("darkTheme")}</button>
-            <button className={theme === "system" ? "active" : ""} onClick={() => setTheme("system")}>{t("systemTheme")}</button>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("appearance")}</strong><span className={mutedText}>{t("appearanceDesc")}</span></div>
+          <div className={segmented}>
+            <button className={segmentButton(theme === "light")} onClick={() => setTheme("light")}>{t("lightTheme")}</button>
+            <button className={segmentButton(theme === "dark")} onClick={() => setTheme("dark")}>{t("darkTheme")}</button>
+            <button className={segmentButton(theme === "system")} onClick={() => setTheme("system")}>{t("systemTheme")}</button>
           </div>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("folderNaming")}</strong><span>{t("folderNamingDesc")}</span></div>
-          <div className="segmented compact">
-            <button className={folderNamingLanguage === "en" ? "active" : ""} onClick={() => setFolderNamingLanguageState("en")}>Career</button>
-            <button className={folderNamingLanguage === "zh" ? "active" : ""} onClick={() => setFolderNamingLanguageState("zh")}>{t("chineseFolderNames")}</button>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("folderNaming")}</strong><span className={mutedText}>{t("folderNamingDesc")}</span></div>
+          <div className={segmented}>
+            <button className={segmentButton(folderNamingLanguage === "en")} onClick={() => setFolderNamingLanguageState("en")}>Career</button>
+            <button className={segmentButton(folderNamingLanguage === "zh")} onClick={() => setFolderNamingLanguageState("zh")}>{t("chineseFolderNames")}</button>
           </div>
         </div>
-        <div className="setting-row vertical">
-          <div><strong>{t("defaultScanFolders")}</strong><span>{t("defaultScanFoldersDesc")}</span></div>
-          <div className="pill-check-grid">
+        <div className="grid gap-3 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("defaultScanFolders")}</strong><span className={mutedText}>{t("defaultScanFoldersDesc")}</span></div>
+          <div className="flex flex-wrap gap-2">
             {(["Desktop", "Downloads", "Documents"] as DefaultScanFolder[]).map((folder) => (
-              <button className={defaultScanFolders.includes(folder) ? "active" : ""} key={folder} onClick={() => toggleDefaultScanFolder(folder)}>
+              <button className={segmentButton(defaultScanFolders.includes(folder))} key={folder} onClick={() => toggleDefaultScanFolder(folder)}>
                 {folder}
               </button>
             ))}
           </div>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("searchHotkey")}</strong><span>{t("searchHotkeyDesc")}: {platform === "darwin" ? "⌘ K" : "Ctrl K"}</span></div>
-          <div className="hotkey-editor">
-            <input value={hotkey} onChange={(event) => setHotkey(event.target.value)} />
-            <button className="glass-button" onClick={() => setSettingsStatus(t("hotkeySaved"))}>{t("save")}</button>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("searchHotkey")}</strong><span className={mutedText}>{t("searchHotkeyDesc")}: {platform === "darwin" ? "⌘ K" : "Ctrl K"}</span></div>
+          <div className="flex items-center gap-2">
+            <input className={cn(inputSurface, "w-28")} value={hotkey} onChange={(event) => setHotkey(event.target.value)} />
+            <button className={glassButton} onClick={() => setSettingsStatus(t("hotkeySaved"))}>{t("save")}</button>
           </div>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("backgroundResident")}</strong><span>{t("backgroundResidentDesc")}</span></div>
-          <button className={`toggle-switch ${backgroundResident ? "on" : ""}`} onClick={() => setBackgroundResident((value) => !value)}><i /></button>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("backgroundResident")}</strong><span className={mutedText}>{t("backgroundResidentDesc")}</span></div>
+          <button className={toggleSwitch(backgroundResident)} onClick={() => setBackgroundResident((value) => !value)}><i /></button>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("launchAtLogin")}</strong><span>{t("launchAtLoginDesc")}</span></div>
-          <button className={`toggle-switch ${launchAtLogin ? "on" : ""}`} onClick={() => setLaunchAtLogin((value) => !value)}><i /></button>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("launchAtLogin")}</strong><span className={mutedText}>{t("launchAtLoginDesc")}</span></div>
+          <button className={toggleSwitch(launchAtLogin)} onClick={() => setLaunchAtLogin((value) => !value)}><i /></button>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("closeBehavior")}</strong><span>{t("closeBehaviorDesc")}</span></div>
-          <div className="segmented compact tri">
-            <button className={closeBehavior === "ask" ? "active" : ""} onClick={() => void updateCloseBehavior("ask")}>{t("askEveryTime")}</button>
-            <button className={closeBehavior === "minimize" ? "active" : ""} onClick={() => void updateCloseBehavior("minimize")}>{t("minimizeToTray")}</button>
-            <button className={closeBehavior === "quit" ? "active" : ""} onClick={() => void updateCloseBehavior("quit")}>{t("quitApp")}</button>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("closeBehavior")}</strong><span className={mutedText}>{t("closeBehaviorDesc")}</span></div>
+          <div className={segmented}>
+            <button className={segmentButton(closeBehavior === "ask")} onClick={() => void updateCloseBehavior("ask")}>{t("askEveryTime")}</button>
+            <button className={segmentButton(closeBehavior === "minimize")} onClick={() => void updateCloseBehavior("minimize")}>{t("minimizeToTray")}</button>
+            <button className={segmentButton(closeBehavior === "quit")} onClick={() => void updateCloseBehavior("quit")}>{t("quitApp")}</button>
           </div>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("logRetention")}</strong><span>{t("logRetentionDesc")}</span></div>
-          <div className="segmented compact">
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("logRetention")}</strong><span className={mutedText}>{t("logRetentionDesc")}</span></div>
+          <div className={segmented}>
             {([15, 30, 60, 90] as RestoreRetentionDays[]).map((days) => (
-              <button className={restoreRetentionDays === days ? "active" : ""} key={days} onClick={() => setRestoreRetentionDaysState(days)}>
+              <button className={segmentButton(restoreRetentionDays === days)} key={days} onClick={() => setRestoreRetentionDaysState(days)}>
                 {days} {t("days")}
               </button>
             ))}
           </div>
         </div>
-        {settingsStatus && <div className="system-toast inline">{settingsStatus}</div>}
+        </div>
+        {settingsStatus && <div className={cn(statusToast, "mt-4")}>{settingsStatus}</div>}
       </section>
 
-      <section className="glass-panel settings-panel">
+      <section className={panelSurface}>
         <SectionTitle title={t("releaseReady")} body={t("releaseReadyDesc")} />
-        <div className="setting-row">
-          <div><strong>{t("searchSources")}</strong><span>{t("searchSourcesDesc")}</span></div>
-          <span className="source user_space">{t("localOnly")}</span>
+        <div className="grid gap-3">
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("searchSources")}</strong><span className={mutedText}>{t("searchSourcesDesc")}</span></div>
+          <span className={sourceBadge("user_space")}>{t("localOnly")}</span>
         </div>
-        <div className="setting-row">
-          <div><strong>{t("excludedDirs")}</strong><span>node_modules, .git, target, dist, build</span></div>
+        <div className="rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div><strong className="block text-sm">{t("excludedDirs")}</strong><span className={mutedText}>node_modules, .git, target, dist, build</span></div>
+        </div>
         </div>
       </section>
     </div>
   );
 }
 
-function FileCard({ file, index, t, compact = false }: { file: FileRecord; index: number; t: Translator; compact?: boolean }) {
+function FileCard({
+  file,
+  index,
+  t,
+  compact = false,
+  disableAnimation = false
+}: {
+  file: FileRecord;
+  index: number;
+  t: Translator;
+  compact?: boolean;
+  disableAnimation?: boolean;
+}) {
   return (
     <motion.button
-      className={`stack-card file-card ${compact ? "compact" : ""}`}
-      layout
-      variants={itemMotion}
+      className={cn(
+        rowSurface,
+        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 hover:bg-white/50 dark:hover:bg-white/10",
+        compact ? "p-3" : "p-4"
+      )}
+      layout={!disableAnimation}
+      variants={disableAnimation ? undefined : itemMotion}
+      initial={disableAnimation ? false : undefined}
+      animate={disableAnimation ? false : undefined}
       style={{ "--delay": `${Math.min(index * 18, 320)}ms` } as CSSProperties}
     >
       <File size={18} />
-      <span>
-        <strong>{file.name}</strong>
-        <small>{file.purpose} / {formatBytes(file.size)}</small>
+      <span className="min-w-0">
+        <strong className="block truncate text-sm">{file.name}</strong>
+        <small className="block text-xs text-[var(--muted)]">{file.purpose} / {formatBytes(file.size)}</small>
       </span>
-      <em>{file.risk_level === "Sensitive" ? t("sensitiveLabel") : t("normal")}</em>
+      <em className={cn("rounded-full border px-2 py-1 text-xs not-italic", toneClasses(file.risk_level === "Sensitive" ? "red" : "green"))}>{file.risk_level === "Sensitive" ? t("sensitiveLabel") : t("normal")}</em>
     </motion.button>
   );
 }
 
 function SectionTitle({ title, body }: { title: string; body: string }) {
   return (
-    <div className="section-title">
+    <div className={sectionTitle}>
       <div>
         <h2>{title}</h2>
         <p>{body}</p>

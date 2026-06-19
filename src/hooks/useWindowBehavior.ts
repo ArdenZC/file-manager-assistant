@@ -2,12 +2,16 @@ import { useCallback, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { CloseBehavior } from "../types/ui";
 
+interface UseWindowBehaviorOptions {
+  platform: NodeJS.Platform | "browser";
+}
+
 function readStoredBehavior(): CloseBehavior {
   const saved = window.localStorage.getItem("zc-close-behavior");
   return saved === "minimize" || saved === "quit" || saved === "ask" ? saved : "ask";
 }
 
-export function useWindowBehavior() {
+export function useWindowBehavior({ platform }: UseWindowBehaviorOptions) {
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(readStoredBehavior);
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
   const closeBehaviorRef = useRef(closeBehavior);
@@ -22,15 +26,31 @@ export function useWindowBehavior() {
     setCloseBehaviorState(next);
   }, []);
 
+  const closeForPlatform = useCallback(async () => {
+    const win = getCurrentWindow();
+    if (platform === "darwin") {
+      await win.hide();
+      return;
+    }
+    await win.close();
+  }, [platform]);
+
   const requestClose = useCallback(() => {
+    if (platform === "darwin" || platform === "win32") {
+      setIsCloseChoiceOpen(false);
+      void closeForPlatform();
+      return;
+    }
+
     const behavior = closeBehaviorRef.current;
     if (behavior === "ask") {
       setIsCloseChoiceOpen(true);
       return;
     }
-    if (behavior === "quit") void getCurrentWindow().close();
+    if (behavior === "quit") void closeForPlatform();
+    if (behavior === "minimize") void getCurrentWindow().minimize();
     setIsCloseChoiceOpen(false);
-  }, []);
+  }, [closeForPlatform]);
 
   const handleWindowAction = useCallback(
     async (action: "minimize" | "maximize" | "close") => {
@@ -52,12 +72,13 @@ export function useWindowBehavior() {
   );
 
   const resolveCloseChoice = useCallback(
-    async (action: "minimize" | "quit", remember: boolean) => {
-      if (remember) await setCloseBehavior(action);
-      setIsCloseChoiceOpen(false);
-      if (action === "quit") void getCurrentWindow().close();
-    },
-    [setCloseBehavior]
+      async (action: "minimize" | "quit", remember: boolean) => {
+        if (remember) await setCloseBehavior(action);
+        setIsCloseChoiceOpen(false);
+        if (action === "quit") void closeForPlatform();
+        if (action === "minimize") void getCurrentWindow().minimize();
+      },
+      [closeForPlatform, setCloseBehavior]
   );
 
   return {

@@ -5,12 +5,14 @@ import { makeTranslator } from "./i18n";
 import { useAppChrome } from "./hooks/useAppChrome";
 import { useDebounce } from "./hooks/useDebounce";
 import { useFileLibrary } from "./hooks/useFileLibrary";
+import { useFsWatcher } from "./hooks/useFsWatcher";
 import { useOperationQueue } from "./hooks/useOperationQueue";
 import { useScanManager } from "./hooks/useScanManager";
 import { useWindowBehavior } from "./hooks/useWindowBehavior";
 import { useAppStore } from "./store/useAppStore";
 import { useRulesStore } from "./store/useRulesStore";
 import type { Rule } from "./types/domain";
+import { readableError } from "./utils/viewHelpers";
 
 export function App() {
   const language = useAppStore((state) => state.language);
@@ -24,6 +26,8 @@ export function App() {
   const rules = useRulesStore((state) => state.rules);
   const addRule = useRulesStore((state) => state.addRule);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const [databaseError, setDatabaseError] = useState("");
+  const [isDatabaseReady, setIsDatabaseReady] = useState(false);
 
   const t = useMemo(() => makeTranslator(language), [language]);
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
@@ -36,9 +40,34 @@ export function App() {
     });
 
   useEffect(() => {
-    void tauriApi.initDatabase().catch(() => undefined);
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+
+    async function initializeDatabase() {
+      try {
+        await tauriApi.initDatabase();
+        if (cancelled) return;
+        setDatabaseError("");
+        setIsDatabaseReady(true);
+      } catch (error) {
+        if (cancelled) return;
+        const message = `无法访问数据库：${readableError(error)}`;
+        setIsDatabaseReady(false);
+        setDatabaseError(message);
+        showError(message);
+      }
+    }
+
+    void initializeDatabase();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showError]);
+
+  useEffect(() => {
+    if (isDatabaseReady) void refresh();
+  }, [isDatabaseReady, refresh]);
+  useFsWatcher({ onRefreshData: refresh, onError: showError });
 
   const appChrome = useAppChrome({ theme, setTheme, setLanguage });
   const {
@@ -49,7 +78,7 @@ export function App() {
     handleWindowAction,
     requestClose,
     resolveCloseChoice
-  } = useWindowBehavior();
+  } = useWindowBehavior({ platform: appChrome.platform });
   const scanManager = useScanManager({
     t,
     loadStats,
@@ -67,6 +96,10 @@ export function App() {
   });
 
   const saveRule = useCallback(async (rule: Rule) => addRule(rule), [addRule]);
+
+  if (databaseError) {
+    return <DatabaseUnavailableState message={databaseError} toast={toast} />;
+  }
 
   return (
     <AppShell
@@ -99,5 +132,27 @@ export function App() {
       loadStats={loadStats}
       t={t}
     />
+  );
+}
+
+function DatabaseUnavailableState({
+  message,
+  toast
+}: {
+  message: string;
+  toast: { message: string; type: "success" | "error" | "info" } | null;
+}) {
+  return (
+    <main className="grid h-screen min-h-[520px] place-items-center bg-[var(--bg)] px-6 text-[var(--ink)]">
+      <section className="w-full max-w-lg rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 text-center shadow-[var(--shadow)] backdrop-blur-3xl">
+        {toast && (
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-left text-sm text-red-600 dark:text-red-300">
+            {toast.message}
+          </div>
+        )}
+        <h1 className="text-xl font-semibold">无法访问数据库</h1>
+        <p className="mt-2 text-sm text-[var(--muted)]">{message}</p>
+      </section>
+    </main>
   );
 }

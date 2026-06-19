@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   base: "./",
@@ -7,7 +8,7 @@ export default defineConfig({
     __BUNDLED_DEV__: "false",
     __SERVER_FORWARD_CONSOLE__: "false"
   },
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     strictPort: true

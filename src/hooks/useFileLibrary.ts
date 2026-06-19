@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { tauriApi } from "../api/tauriApi";
 import type { DashboardStats, FileQueryResult, FileRecord } from "../types/domain";
 import { readableError } from "../utils/viewHelpers";
@@ -36,6 +36,7 @@ export function useFileLibrary({ debouncedSearchQuery, onError }: FileLibraryOpt
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [libraryPage, setLibraryPage] = useState<FileQueryResult>(emptyPage);
   const [selectedFileId, setSelectedFileId] = useState("");
+  const firstPageRequestIdRef = useRef(0);
 
   const loadStats = useCallback(async () => {
     try {
@@ -47,12 +48,16 @@ export function useFileLibrary({ debouncedSearchQuery, onError }: FileLibraryOpt
   }, [onError]);
 
   const loadFirstPage = useCallback(async () => {
+    const requestId = ++firstPageRequestIdRef.current;
     try {
       const page = await tauriApi.getPagedFiles(PAGE_SIZE, 0, debouncedSearchQuery || undefined);
+      if (requestId !== firstPageRequestIdRef.current) return;
       setLibraryPage(page);
-      setSelectedFileId((current) => current || page.files[0]?.id || "");
+      setSelectedFileId((current) => (page.files.some((file) => file.id === current) ? current : page.files[0]?.id || ""));
     } catch (error) {
+      if (requestId !== firstPageRequestIdRef.current) return;
       setLibraryPage(emptyPage);
+      setSelectedFileId("");
       onError(readableError(error));
     }
   }, [debouncedSearchQuery, onError]);

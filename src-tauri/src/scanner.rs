@@ -9,12 +9,13 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::{Instant, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Runtime, State};
 use thiserror::Error;
 
-const BATCH_SIZE: usize = 1_000;
+const SCAN_BATCH_SIZE: usize = 500;
+const SCAN_EMIT_INTERVAL: Duration = Duration::from_millis(200);
 const SCAN_STARTED_EVENT: &str = "scan-started";
 const SCAN_BATCH_EVENT: &str = "scan-batch";
 const SCAN_PROGRESS_EVENT: &str = "scan-progress";
@@ -139,14 +140,13 @@ fn scan_directory_blocking<R: Runtime>(
     let skipped = Arc::new(AtomicU64::new(0));
     let skipped_for_filter = Arc::clone(&skipped);
     let mut counters = ScanCounters::default();
-    let mut batch_index = 0;
-    let mut batch = Vec::with_capacity(BATCH_SIZE);
+    let mut batch = ScanBatchBuffer::new(started_at);
 
     app.emit(
         SCAN_STARTED_EVENT,
         ScanStartedPayload {
             root: root_label.clone(),
-            batch_size: BATCH_SIZE,
+            batch_size: SCAN_BATCH_SIZE,
         },
     )?;
 
@@ -199,7 +199,7 @@ fn scan_directory_blocking<R: Runtime>(
             }
         }
 
-        if batch.len() >= BATCH_SIZE {
+        if batch.should_flush(Instant::now()) {
             let context = BatchEmitContext {
                 app: &app,
                 db: &db,
@@ -207,12 +207,7 @@ fn scan_directory_blocking<R: Runtime>(
                 counters: &counters,
                 started_at,
             };
-            emit_batch(
-                &context,
-                &mut batch,
-                &mut batch_index,
-                skipped.load(Ordering::Relaxed),
-            )?;
+            batch.flush(&context, skipped.load(Ordering::Relaxed))?;
         }
     }
 
@@ -224,12 +219,7 @@ fn scan_directory_blocking<R: Runtime>(
             counters: &counters,
             started_at,
         };
-        emit_batch(
-            &context,
-            &mut batch,
-            &mut batch_index,
-            skipped.load(Ordering::Relaxed),
-        )?;
+        batch.flush(&context, skipped.load(Ordering::Relaxed))?;
     }
 
     let summary = progress_payload(
@@ -250,35 +240,70 @@ struct BatchEmitContext<'a, R: Runtime> {
     started_at: Instant,
 }
 
-fn emit_batch<R: Runtime>(
-    context: &BatchEmitContext<'_, R>,
-    batch: &mut Vec<ScannedEntry>,
-    batch_index: &mut u64,
-    skipped: u64,
-) -> Result<(), ScanError> {
-    let progress = progress_payload(context.root, context.counters, skipped, context.started_at);
-    let entries = std::mem::take(batch);
-    context.db.insert_files(
-        &entries
-            .iter()
-            .map(scanned_entry_to_insert_request)
-            .collect::<Vec<_>>(),
-    )?;
+struct ScanBatchBuffer {
+    entries: Vec<ScannedEntry>,
+    batch_index: u64,
+    last_emit_at: Instant,
+}
 
-    context.app.emit(
-        SCAN_BATCH_EVENT,
-        ScanBatchPayload {
-            root: context.root.to_string(),
-            batch_index: *batch_index,
-            entries,
-            progress: progress.clone(),
-        },
-    )?;
-    context.app.emit(SCAN_PROGRESS_EVENT, progress)?;
+impl ScanBatchBuffer {
+    fn new(started_at: Instant) -> Self {
+        Self {
+            entries: Vec::with_capacity(SCAN_BATCH_SIZE),
+            batch_index: 0,
+            last_emit_at: started_at,
+        }
+    }
 
-    *batch_index += 1;
-    batch.reserve(BATCH_SIZE);
-    Ok(())
+    fn push(&mut self, entry: ScannedEntry) {
+        self.entries.push(entry);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn should_flush(&self, now: Instant) -> bool {
+        !self.entries.is_empty()
+            && (self.entries.len() >= SCAN_BATCH_SIZE
+                || now.duration_since(self.last_emit_at) >= SCAN_EMIT_INTERVAL)
+    }
+
+    fn flush<R: Runtime>(
+        &mut self,
+        context: &BatchEmitContext<'_, R>,
+        skipped: u64,
+    ) -> Result<(), ScanError> {
+        if self.entries.is_empty() {
+            return Ok(());
+        }
+
+        let progress =
+            progress_payload(context.root, context.counters, skipped, context.started_at);
+        let entries = std::mem::take(&mut self.entries);
+        context.db.insert_files(
+            &entries
+                .iter()
+                .map(scanned_entry_to_insert_request)
+                .collect::<Vec<_>>(),
+        )?;
+
+        context.app.emit(
+            SCAN_BATCH_EVENT,
+            ScanBatchPayload {
+                root: context.root.to_string(),
+                batch_index: self.batch_index,
+                entries,
+                progress: progress.clone(),
+            },
+        )?;
+        context.app.emit(SCAN_PROGRESS_EVENT, progress)?;
+
+        self.batch_index += 1;
+        self.last_emit_at = Instant::now();
+        self.entries.reserve(SCAN_BATCH_SIZE);
+        Ok(())
+    }
 }
 
 fn scanned_entry_to_insert_request(entry: &ScannedEntry) -> InsertFileRequest {
@@ -393,7 +418,7 @@ fn is_scan_cancelled(cancel_flag: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{ffi::OsStr, sync::atomic::AtomicBool};
+    use std::{ffi::OsStr, sync::atomic::AtomicBool, time::Duration};
 
     #[test]
     fn should_skip_dir_matches_case_insensitive_generated_variants() {
@@ -409,5 +434,43 @@ mod tests {
         let cancel_flag = AtomicBool::new(true);
 
         assert!(is_scan_cancelled(&cancel_flag));
+    }
+
+    #[test]
+    fn scan_batch_buffer_flushes_after_emit_interval() {
+        let started_at = Instant::now();
+        let mut buffer = ScanBatchBuffer::new(started_at);
+
+        assert!(!buffer.should_flush(started_at + Duration::from_millis(250)));
+
+        buffer.push(test_scanned_entry(1));
+
+        assert!(!buffer.should_flush(started_at + Duration::from_millis(199)));
+        assert!(buffer.should_flush(started_at + SCAN_EMIT_INTERVAL));
+    }
+
+    #[test]
+    fn scan_batch_buffer_flushes_when_batch_is_full() {
+        let started_at = Instant::now();
+        let mut buffer = ScanBatchBuffer::new(started_at);
+
+        for index in 0..SCAN_BATCH_SIZE {
+            buffer.push(test_scanned_entry(index));
+        }
+
+        assert!(buffer.should_flush(started_at + Duration::from_millis(1)));
+    }
+
+    fn test_scanned_entry(index: usize) -> ScannedEntry {
+        ScannedEntry {
+            path: format!("/tmp/file-{index}.txt"),
+            name: format!("file-{index}.txt"),
+            extension: "txt".to_string(),
+            size: 1,
+            mtime: 0,
+            ctime: 0,
+            is_dir: false,
+            state_code: 0,
+        }
     }
 }
