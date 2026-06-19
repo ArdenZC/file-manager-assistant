@@ -22,7 +22,7 @@ import { ViewErrorBoundary } from "./components/ErrorBoundary";
 import { AmbientMesh, CloseChoiceDialog, TitlebarTools, ZenMark } from "./components/ShellChrome";
 import { makeTranslator } from "./i18n";
 import { useDebounce } from "./hooks/useDebounce";
-import { useScanProgress } from "./hooks/useScanProgress";
+import { useScanManager } from "./hooks/useScanManager";
 import { useAppStore } from "./store/useAppStore";
 import { useRulesStore } from "./store/useRulesStore";
 import type {
@@ -98,11 +98,9 @@ export function App() {
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [libraryPage, setLibraryPage] = useState<FileQueryResult>(emptyPage);
   const [selectedFileId, setSelectedFileId] = useState("");
-  const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
   const [selectedOperationIds, setSelectedOperationIds] = useState<Set<string>>(new Set());
   const [previewNameOverrides, setPreviewNameOverrides] = useState<Record<string, string>>({});
-  const [isScanning, setIsScanning] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
@@ -112,7 +110,6 @@ export function App() {
   });
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
-  const lastScanStatsRefreshRef = useRef(0);
   const platform = detectBrowserPlatform();
   const isWindows = platform === "win32";
   const effectiveTheme: Exclude<ThemeMode, "system"> = theme === "system" ? (systemDark ? "dark" : "light") : theme;
@@ -141,19 +138,13 @@ export function App() {
     }
   }, [debouncedSearchQuery]);
 
-  const refreshStatsDuringScan = useCallback(() => {
-    const now = Date.now();
-    if (now - lastScanStatsRefreshRef.current < 1000) return;
-    lastScanStatsRefreshRef.current = now;
-    void loadStats();
-  }, [loadStats]);
-
-  const scanState = useScanProgress({
-    onBatch: refreshStatsDuringScan,
-    onComplete: () => {
-      lastScanStatsRefreshRef.current = 0;
-      void Promise.all([loadStats(), loadFirstPage()]);
-    }
+  const { selectedFolders, isScanning, scanState, handleScan, handleChooseFolders, cancelScan } = useScanManager({
+    t,
+    loadStats,
+    loadFirstPage,
+    showSuccess,
+    showError,
+    clearToast: () => setToast(null)
   });
 
   useEffect(() => {
@@ -252,46 +243,6 @@ export function App() {
   async function setCloseBehavior(next: CloseBehavior) {
     window.localStorage.setItem("zc-close-behavior", next);
     setCloseBehaviorState(next);
-  }
-
-  function askForScanPath() {
-    return window.prompt(t("folderPickerTitle"), selectedFolders[0] ?? "")?.trim() ?? "";
-  }
-
-  async function scanPath(path: string) {
-    if (!path) {
-      showError(t("noFolderSelected"));
-      return;
-    }
-    setSelectedFolders([path]);
-    setIsScanning(true);
-    setToast(null);
-    scanState.reset();
-    try {
-      const summary = await scanState.startScan(path);
-      await Promise.all([loadStats(), loadFirstPage()]);
-      showSuccess(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
-    } catch (error) {
-      showError(readableError(error));
-    } finally {
-      setIsScanning(false);
-    }
-  }
-
-  async function handleScan() {
-    const paths = selectedFolders.length > 0 ? selectedFolders : [askForScanPath()].filter(Boolean);
-    for (const p of paths) {
-      if (p) await scanPath(p);
-    }
-  }
-
-  async function handleChooseFolders() {
-    await scanPath(askForScanPath());
-  }
-
-  async function cancelScan() {
-    await tauriApi.cancelScan();
-    setIsScanning(false);
   }
 
   async function saveRule(rule: Rule) {
