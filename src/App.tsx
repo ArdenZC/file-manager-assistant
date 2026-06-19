@@ -22,6 +22,7 @@ import { ViewErrorBoundary } from "./components/ErrorBoundary";
 import { AmbientMesh, CloseChoiceDialog, TitlebarTools, ZenMark } from "./components/ShellChrome";
 import { makeTranslator } from "./i18n";
 import { useDebounce } from "./hooks/useDebounce";
+import { useOperationQueue } from "./hooks/useOperationQueue";
 import { useScanManager } from "./hooks/useScanManager";
 import { useAppStore } from "./store/useAppStore";
 import { useRulesStore } from "./store/useRulesStore";
@@ -29,16 +30,11 @@ import type {
   CloseBehavior,
   DashboardStats,
   FileQueryResult,
-  FileRecord,
-  OperationLog,
-  OperationPreview,
   Rule
 } from "./types/domain";
 import type { ThemeMode } from "./types/ui";
 import { formatDate } from "./utils/format";
 import {
-  applyPreviewNameOverride,
-  createOperationPreviews,
   detectBrowserPlatform,
   preferredLanguage,
   preferredTheme,
@@ -56,7 +52,6 @@ import {
 } from "./views/AppViews";
 
 const PAGE_SIZE = 50;
-const MAX_LOGS = 500;
 
 const emptyStats: DashboardStats = {
   totalFiles: 0,
@@ -98,9 +93,6 @@ export function App() {
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [libraryPage, setLibraryPage] = useState<FileQueryResult>(emptyPage);
   const [selectedFileId, setSelectedFileId] = useState("");
-  const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
-  const [selectedOperationIds, setSelectedOperationIds] = useState<Set<string>>(new Set());
-  const [previewNameOverrides, setPreviewNameOverrides] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
@@ -216,19 +208,23 @@ export function App() {
 
   const files = libraryPage.files;
   const selectedFile = files.find((file) => file.id === selectedFileId) ?? files[0];
-  const previews = useMemo(() => createOperationPreviews(files), [files]);
-  const displayPreviews = useMemo(
-    () => previews.map((preview) => applyPreviewNameOverride(preview, previewNameOverrides[preview.id])),
-    [previewNameOverrides, previews]
-  );
-  const previewActionCount = displayPreviews.filter((preview) => preview.status === "pending").length;
-
-  useEffect(() => {
-    setSelectedOperationIds(
-      new Set(previews.filter((preview) => preview.selected_by_default).map((preview) => preview.id))
-    );
-    setPreviewNameOverrides({});
-  }, [previews]);
+  const {
+    operationLogs,
+    selectedOperationIds,
+    setSelectedOperationIds,
+    displayPreviews,
+    previewActionCount,
+    executeSelected,
+    restoreOperationLogs,
+    onRenamePreview
+  } = useOperationQueue({
+    files,
+    t,
+    loadStats,
+    loadFirstPage,
+    showSuccess,
+    showError
+  });
 
   const nav = [
     { id: "scanner" as const, label: t("spaceScan"), icon: Radar },
@@ -258,35 +254,6 @@ export function App() {
     } catch (error) {
       showError(readableError(error));
       throw error;
-    }
-  }
-
-  async function executeSelected() {
-    const operations = displayPreviews.filter((preview) =>
-      selectedOperationIds.has(preview.id) && preview.is_executable !== false
-    );
-    if (!operations.length) return;
-    try {
-      const result = await tauriApi.executeMoves(operations as OperationPreview[]);
-      setOperationLogs((current) => [...result.logs, ...current].slice(0, MAX_LOGS));
-      setSelectedOperationIds(new Set());
-      await Promise.all([loadStats(), loadFirstPage()]);
-      showSuccess(t("success"));
-    } catch (error) {
-      showError(readableError(error));
-    }
-  }
-
-  async function restoreOperationLogs(logs: OperationLog[]) {
-    if (!logs.length) return;
-    try {
-      const result = await tauriApi.restoreMoves(logs);
-      const updatedById = new Map(result.logs.map((log) => [log.id, log]));
-      setOperationLogs((current) => current.map((log) => updatedById.get(log.id) ?? log));
-      await Promise.all([loadStats(), loadFirstPage()]);
-      showSuccess(`${t("restored")}: ${result.restored.toLocaleString()}`);
-    } catch (error) {
-      showError(readableError(error));
     }
   }
 
@@ -499,9 +466,7 @@ export function App() {
                   previews={displayPreviews}
                   selectedIds={selectedOperationIds}
                   setSelectedIds={setSelectedOperationIds}
-                  onRenamePreview={(id, name) =>
-                    setPreviewNameOverrides((current) => ({ ...current, [id]: name }))
-                  }
+                  onRenamePreview={onRenamePreview}
                   executeSelected={executeSelected}
                   t={t}
                 />
