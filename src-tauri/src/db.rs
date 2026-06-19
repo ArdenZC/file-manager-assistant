@@ -7,7 +7,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 use sysinfo::Disks;
@@ -59,6 +58,12 @@ struct IndexedFileRow {
 }
 
 const CLASSIFY_BATCH_SIZE: usize = 500;
+
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("0001", include_str!("migrations/0001_initial.sql")),
+    ("0002", include_str!("migrations/0002_classification.sql")),
+    ("0003", include_str!("migrations/0003_fts.sql")),
+];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -656,200 +661,44 @@ fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {
 }
 
 fn migrate(conn: &Connection) -> Result<(), DbError> {
-    assert_fts5_available(conn)?;
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS files (
-            id TEXT PRIMARY KEY,
-            path TEXT NOT NULL UNIQUE,
-            name TEXT NOT NULL,
-            extension TEXT NOT NULL DEFAULT '',
-            size INTEGER NOT NULL DEFAULT 0,
-            mtime INTEGER NOT NULL DEFAULT 0,
-            ctime INTEGER NOT NULL DEFAULT 0,
-            is_dir INTEGER NOT NULL DEFAULT 0 CHECK (is_dir IN (0, 1)),
-            state_code INTEGER NOT NULL DEFAULT 0
-        );
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY);")?;
 
-        CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
-        CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
-        CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
-        CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
-        "#,
-    )?;
-    ensure_file_classification_columns(conn)?;
-    conn.execute_batch(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type);
-        CREATE INDEX IF NOT EXISTS idx_files_purpose ON files(purpose);
-        CREATE INDEX IF NOT EXISTS idx_files_lifecycle ON files(lifecycle);
-        CREATE INDEX IF NOT EXISTS idx_files_risk_level ON files(risk_level);
-        CREATE INDEX IF NOT EXISTS idx_files_requires_confirmation ON files(requires_confirmation);
-        "#,
-    )?;
-    ensure_trigram_fts(conn)?;
-    conn.execute_batch(
-        r#"
-        CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
-            INSERT INTO files_fts(rowid, name, path)
-            VALUES (new.rowid, new.name, new.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, path)
-            VALUES('delete', old.rowid, old.name, old.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, path)
-            VALUES('delete', old.rowid, old.name, old.path);
-            INSERT INTO files_fts(rowid, name, path)
-            VALUES (new.rowid, new.name, new.path);
-        END;
-        "#,
-    )?;
-    Ok(())
-}
-
-fn ensure_file_classification_columns(conn: &Connection) -> Result<(), DbError> {
-    add_column_if_missing(
-        conn,
-        "ctime",
-        "ALTER TABLE files ADD COLUMN ctime INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        conn,
-        "file_type",
-        "ALTER TABLE files ADD COLUMN file_type TEXT NOT NULL DEFAULT 'Other'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "purpose",
-        "ALTER TABLE files ADD COLUMN purpose TEXT NOT NULL DEFAULT 'Unknown'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "lifecycle",
-        "ALTER TABLE files ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Inbox'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "context",
-        "ALTER TABLE files ADD COLUMN context TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "risk_level",
-        "ALTER TABLE files ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'Normal'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "suggested_action",
-        "ALTER TABLE files ADD COLUMN suggested_action TEXT NOT NULL DEFAULT 'Keep'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "suggested_target_path",
-        "ALTER TABLE files ADD COLUMN suggested_target_path TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "suggested_name",
-        "ALTER TABLE files ADD COLUMN suggested_name TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "confidence",
-        "ALTER TABLE files ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5",
-    )?;
-    add_column_if_missing(
-        conn,
-        "classification_reason",
-        "ALTER TABLE files ADD COLUMN classification_reason TEXT NOT NULL DEFAULT 'Indexed by Zen Canvas Tauri backend.'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "matched_rules",
-        "ALTER TABLE files ADD COLUMN matched_rules TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "requires_confirmation",
-        "ALTER TABLE files ADD COLUMN requires_confirmation INTEGER NOT NULL DEFAULT 0",
-    )?;
-    Ok(())
-}
-
-fn add_column_if_missing(conn: &Connection, column: &str, alter_sql: &str) -> Result<(), DbError> {
-    let exists = conn
-        .prepare("PRAGMA table_info(files)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(column));
-
-    if !exists {
-        conn.execute_batch(alter_sql)?;
+    for (version, sql) in MIGRATIONS {
+        let applied = conn
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = ?1",
+                [version],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !applied {
+            execute_migration(conn, version, sql)?;
+            conn.execute("INSERT INTO schema_migrations VALUES (?1)", [version])?;
+        }
     }
     Ok(())
 }
 
-static FTS5_CHECKED: OnceLock<()> = OnceLock::new();
-
-fn assert_fts5_available(conn: &Connection) -> Result<(), DbError> {
-    if FTS5_CHECKED.get().is_none() {
-        conn.execute_batch(
-            r#"
-            CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(value, tokenize='trigram');
-            DROP TABLE temp.fts5_probe;
-            "#,
-        )?;
-        let _ = FTS5_CHECKED.set(());
-    }
-    Ok(())
-}
-
-fn ensure_trigram_fts(conn: &Connection) -> Result<(), DbError> {
-    let existing_sql = conn
-        .query_row(
-            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'files_fts'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-
-    if existing_sql
-        .as_deref()
-        .map(is_trigram_fts_definition)
-        .unwrap_or(false)
-    {
+fn execute_migration(conn: &Connection, version: &str, sql: &str) -> Result<(), DbError> {
+    if version == "0002" {
+        for statement in sql
+            .split(';')
+            .map(str::trim)
+            .filter(|statement| !statement.is_empty())
+        {
+            match conn.execute_batch(statement) {
+                Ok(()) => {}
+                Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                    if message.contains("duplicate column name") => {}
+                Err(error) => return Err(DbError::Sqlite(error)),
+            }
+        }
         return Ok(());
     }
 
-    conn.execute_batch(
-        r#"
-        DROP TRIGGER IF EXISTS files_ai;
-        DROP TRIGGER IF EXISTS files_ad;
-        DROP TRIGGER IF EXISTS files_au;
-        DROP TABLE IF EXISTS files_fts;
-
-        CREATE VIRTUAL TABLE files_fts USING fts5(
-            name,
-            path,
-            content='files',
-            content_rowid='rowid',
-            tokenize='trigram'
-        );
-
-        INSERT INTO files_fts(files_fts) VALUES('rebuild');
-        "#,
-    )?;
+    conn.execute_batch(sql)?;
     Ok(())
-}
-
-fn is_trigram_fts_definition(sql: &str) -> bool {
-    let normalized = sql.to_ascii_lowercase().replace(char::is_whitespace, "");
-    normalized.contains("tokenize='trigram'") || normalized.contains("tokenize=\"trigram\"")
 }
 
 fn build_fts_query(input: &str) -> Option<String> {
