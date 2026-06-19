@@ -4,6 +4,7 @@ use std::{
     fs::{self, OpenOptions},
     io,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::command;
@@ -104,6 +105,12 @@ pub struct RestoreMovesResult {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RevealCommand {
+    program: &'static str,
+    args: Vec<String>,
+}
+
 #[command]
 pub fn move_file(source_path: String, target_path: String) -> Result<FileOperationResult, String> {
     let source = validate_source_path(&PathBuf::from(source_path))?;
@@ -138,6 +145,21 @@ pub fn execute_moves(request: ExecuteMovesRequest) -> Result<ExecuteMovesResult,
         updated_files: Vec::new(),
         batch_id,
     })
+}
+
+#[command]
+pub fn reveal_in_folder(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Path cannot be empty.".to_string());
+    }
+
+    let command = build_reveal_command(Path::new(trimmed))?;
+    ProcessCommand::new(command.program)
+        .args(&command.args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to reveal path in file manager: {error}"))
 }
 
 #[command]
@@ -521,6 +543,49 @@ fn protected_roots() -> Vec<PathBuf> {
     roots
 }
 
+fn build_reveal_command(path: &Path) -> Result<RevealCommand, String> {
+    if path.as_os_str().is_empty() {
+        return Err("Path cannot be empty.".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        return Ok(RevealCommand {
+            program: "explorer",
+            args: vec![format!(
+                "/select,{}",
+                path.to_string_lossy().replace('/', "\\")
+            )],
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(RevealCommand {
+            program: "open",
+            args: vec!["-R".to_string(), path.to_string_lossy().into_owned()],
+        });
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let directory = if path.is_dir() {
+            path
+        } else {
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or(path)
+        };
+        return Ok(RevealCommand {
+            program: "xdg-open",
+            args: vec![directory.to_string_lossy().into_owned()],
+        });
+    }
+
+    #[allow(unreachable_code)]
+    Err("Reveal in folder is not supported on this platform.".to_string())
+}
+
 fn normalize_for_compare(path: &Path) -> String {
     let value = normalize_path(path).trim_end_matches('/').to_string();
     if cfg!(windows) {
@@ -706,6 +771,44 @@ mod tests {
         assert!(!renamed.exists());
         assert_eq!(restored.restored, 1);
         assert_eq!(restored.logs[0].restore_status, "restored");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn build_reveal_command_selects_file_with_windows_explorer() {
+        let command = build_reveal_command(Path::new("C:/Users/example/Documents/sample.txt"))
+            .expect("reveal command");
+
+        assert_eq!(command.program, "explorer");
+        assert_eq!(
+            command.args,
+            vec!["/select,C:\\Users\\example\\Documents\\sample.txt"]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn build_reveal_command_selects_file_with_macos_open() {
+        let command =
+            build_reveal_command(Path::new("/Users/example/Documents/sample.txt"))
+                .expect("reveal command");
+
+        assert_eq!(command.program, "open");
+        assert_eq!(
+            command.args,
+            vec!["-R", "/Users/example/Documents/sample.txt"]
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn build_reveal_command_opens_parent_directory_on_linux() {
+        let command =
+            build_reveal_command(Path::new("/home/example/Documents/sample.txt"))
+                .expect("reveal command");
+
+        assert_eq!(command.program, "xdg-open");
+        assert_eq!(command.args, vec!["/home/example/Documents"]);
     }
 
     fn test_dir() -> PathBuf {

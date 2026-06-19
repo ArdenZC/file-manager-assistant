@@ -20,6 +20,7 @@
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.3",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "lucide-react": "^0.468.0",
     "motion": "^12.40.0",
     "react": "^19.0.0",

@@ -104,6 +104,10 @@ export const tauriApi = {
     return invokeCommand<RestoreMovesResult>("restore_moves", { request: { logs } });
   },
 
+  revealInFolder(path: string): Promise<void> {
+    return invokeCommand<void>("reveal_in_folder", { path });
+  },
+
   executeRulesOnInbox(rules: Rule[]): Promise<RuleExecutionSummary> {
     return invokeCommand<RuleExecutionSummary>("execute_rules_on_inbox", { rules });
   },

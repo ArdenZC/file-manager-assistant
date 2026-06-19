@@ -44,7 +44,7 @@
 - Supports filename search, path search, tokenized terms, and extension filters.
 - Ranking combines relevance, recent modification, recent opens, and path depth.
 - Results can open files, reveal them in the system file manager, or open File Library details.
-- Dedicated 100k simulated-index performance test targets `<100ms` query latency.
+- The current suite includes architecture guard tests; a real 100k-index benchmark will be added as a future performance baseline.
 
 ## Safety
 

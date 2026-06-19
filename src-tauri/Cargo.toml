@@ -27,6 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.32"
 tauri = { version = "2", default-features = false, features = [] }
+tauri-plugin-dialog = "2.7.1"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting"] }
 

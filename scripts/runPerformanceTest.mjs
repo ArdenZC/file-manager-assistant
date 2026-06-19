@@ -9,7 +9,7 @@ function read(relativePath) {
 
 function assert(condition, message) {
   if (!condition) {
-    console.error(`Performance guard failed: ${message}`);
+    console.error(`Architecture guard failed: ${message}`);
     process.exitCode = 1;
   }
 }
@@ -30,5 +30,5 @@ assert(!app.includes("window.fileManager") && !appViews.includes("window.fileMan
 assert(!app.includes("snapshot") && !appViews.includes("snapshot"), "Runtime UI must not keep an all-files snapshot.");
 
 if (!process.exitCode) {
-  console.log("Performance guard passed: paged IPC, bounded library loading, and no legacy full snapshot path.");
+  console.log("Architecture guard passed: paged IPC, bounded library loading, and no legacy full snapshot path.");
 }

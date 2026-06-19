@@ -8,6 +8,7 @@ use zen_canvas_tauri::{open_database, ScanCancellationToken};
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let db = open_database(&app.handle())
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
@@ -41,6 +42,7 @@ fn main() {
             zen_canvas_tauri::scanner::cancel_scan,
             zen_canvas_tauri::file_ops::move_file,
             zen_canvas_tauri::file_ops::rename_file,
+            zen_canvas_tauri::file_ops::reveal_in_folder,
             zen_canvas_tauri::file_ops::execute_moves,
             zen_canvas_tauri::file_ops::restore_moves
         ])

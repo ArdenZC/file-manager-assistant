@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { tauriApi } from "../api/tauriApi";
 import type { Translator } from "../types/ui";
 import { readableError } from "../utils/viewHelpers";
@@ -40,7 +41,17 @@ export function useScanManager({
   const { startScan, reset, ...scanStateData } = scanState;
 
   const askForScanPath = useCallback(
-    () => window.prompt(t("folderPickerTitle"), selectedFolders[0] ?? "")?.trim() ?? "",
+    async () => {
+      const selectedPath = await open({
+        directory: true,
+        multiple: false,
+        title: t("folderPickerTitle"),
+        defaultPath: selectedFolders[0]
+      });
+
+      if (Array.isArray(selectedPath)) return selectedPath[0]?.trim() ?? "";
+      return selectedPath?.trim() ?? "";
+    },
     [selectedFolders, t]
   );
 
@@ -67,15 +78,25 @@ export function useScanManager({
   );
 
   const handleScan = useCallback(async () => {
-    const paths = selectedFolders.length > 0 ? selectedFolders : [askForScanPath()].filter(Boolean);
-    for (const path of paths) {
-      if (path) await scanPath(path);
+    try {
+      const requestedPath = selectedFolders.length > 0 ? "" : await askForScanPath();
+      const paths = selectedFolders.length > 0 ? selectedFolders : [requestedPath].filter(Boolean);
+      for (const path of paths) {
+        if (path) await scanPath(path);
+      }
+    } catch (error) {
+      onError(readableError(error));
     }
-  }, [askForScanPath, scanPath, selectedFolders]);
+  }, [askForScanPath, onError, scanPath, selectedFolders]);
 
   const handleChooseFolders = useCallback(async () => {
-    await scanPath(askForScanPath());
-  }, [askForScanPath, scanPath]);
+    try {
+      const path = await askForScanPath();
+      if (path) await scanPath(path);
+    } catch (error) {
+      onError(readableError(error));
+    }
+  }, [askForScanPath, onError, scanPath]);
 
   const cancelScan = useCallback(async () => {
     await tauriApi.cancelScan();

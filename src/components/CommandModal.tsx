@@ -69,6 +69,19 @@ export function CommandModal({
     onClose();
   }
 
+  async function revealFile(file: FileRecord) {
+    try {
+      await tauriApi.revealInFolder(file.path);
+    } catch (error) {
+      console.error("Failed to reveal file in folder.", error);
+    }
+  }
+
+  function openSortingPreview() {
+    setView("preview");
+    onClose();
+  }
+
   function clearSearch() {
     setSearch("");
     setActiveIndex(0);
@@ -109,9 +122,18 @@ export function CommandModal({
             event.preventDefault();
             setActiveIndex((index) => Math.max(index - 1, 0));
           }
+          if (event.key === "Enter" && event.altKey && visibleResults[activeIndex]) {
+            event.preventDefault();
+            void revealFile(visibleResults[activeIndex]);
+            return;
+          }
           if (event.key === "Enter" && visibleResults[activeIndex]) {
             event.preventDefault();
             chooseFile(visibleResults[activeIndex]);
+          }
+          if (event.key === "Tab") {
+            event.preventDefault();
+            openSortingPreview();
           }
           if (event.key === "Escape") onClose();
         }}
