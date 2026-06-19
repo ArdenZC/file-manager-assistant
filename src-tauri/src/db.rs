@@ -60,6 +60,9 @@ struct IndexedFileRow {
 
 const CLASSIFY_BATCH_SIZE: usize = 500;
 
+/// 当前期望的 schema 版本号，每次需要改动 schema 时 +1
+const CURRENT_SCHEMA_VERSION: i32 = 3;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsertFileRequest {
@@ -496,32 +499,39 @@ impl Database {
 
     pub fn get_stats_summary(&self) -> Result<StatsSummary, DbError> {
         let conn = self.conn()?;
-        let (total_files, total_size): (i64, i64) = conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM files WHERE is_dir = 0",
+        // 一次事务内完成所有聚合，保证快照一致性
+        conn.execute_batch("BEGIN DEFERRED")?;
+        let (
+            total_files,
+            total_size,
+            large_files,
+            sensitive_files,
+            needs_confirmation,
+            last_mtime,
+        ): (i64, i64, i64, i64, i64, Option<i64>) = conn.query_row(
+            r#"
+            SELECT
+                COUNT(*)        FILTER (WHERE is_dir = 0),
+                COALESCE(SUM(size) FILTER (WHERE is_dir = 0), 0),
+                COUNT(*)        FILTER (WHERE is_dir = 0 AND size >= 104857600),
+                COUNT(*)        FILTER (WHERE is_dir = 0
+                                  AND (risk_level = 'Sensitive' OR lifecycle = 'Sensitive')),
+                COUNT(*)        FILTER (WHERE is_dir = 0 AND requires_confirmation = 1),
+                MAX(mtime)
+            FROM files
+            "#,
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            },
         )?;
-        let large_files = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND size >= ?1",
-            params![100_i64 * 1024 * 1024],
-            |row| row.get(0),
-        )?;
-        let last_mtime: Option<i64> =
-            conn.query_row("SELECT MAX(mtime) FROM files", [], |row| {
-                row.get::<_, Option<i64>>(0)
-            })?;
-
-        let sensitive_files = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND (risk_level = 'Sensitive' OR lifecycle = 'Sensitive')",
-            [],
-            |row| row.get(0),
-        )?;
-        let needs_confirmation = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE is_dir = 0 AND requires_confirmation = 1",
-            [],
-            |row| row.get(0),
-        )?;
-
         let mut by_type = HashMap::new();
         let mut stmt = conn.prepare(
             r#"
@@ -547,7 +557,7 @@ impl Database {
             };
             *by_type.entry(normalized_type).or_insert(0) += count;
         }
-
+        drop(stmt);
         let mut by_lifecycle = HashMap::new();
         let mut stmt = conn.prepare(
             r#"
@@ -564,9 +574,9 @@ impl Database {
             let (lifecycle, count) = row?;
             by_lifecycle.insert(lifecycle, count);
         }
-
+        drop(stmt);
+        conn.execute_batch("COMMIT")?;
         let disks = Disks::new_with_refreshed_list();
-        // 取空间最大的磁盘作为代表（通常是系统盘）
         let (disk_total, disk_free) = disks
             .iter()
             .map(|d| (d.total_space(), d.available_space()))
@@ -655,145 +665,6 @@ fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn migrate(conn: &Connection) -> Result<(), DbError> {
-    assert_fts5_available(conn)?;
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS files (
-            id TEXT PRIMARY KEY,
-            path TEXT NOT NULL UNIQUE,
-            name TEXT NOT NULL,
-            extension TEXT NOT NULL DEFAULT '',
-            size INTEGER NOT NULL DEFAULT 0,
-            mtime INTEGER NOT NULL DEFAULT 0,
-            ctime INTEGER NOT NULL DEFAULT 0,
-            is_dir INTEGER NOT NULL DEFAULT 0 CHECK (is_dir IN (0, 1)),
-            state_code INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
-        CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
-        CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
-        CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
-        "#,
-    )?;
-    ensure_file_classification_columns(conn)?;
-    conn.execute_batch(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type);
-        CREATE INDEX IF NOT EXISTS idx_files_purpose ON files(purpose);
-        CREATE INDEX IF NOT EXISTS idx_files_lifecycle ON files(lifecycle);
-        CREATE INDEX IF NOT EXISTS idx_files_risk_level ON files(risk_level);
-        CREATE INDEX IF NOT EXISTS idx_files_requires_confirmation ON files(requires_confirmation);
-        "#,
-    )?;
-    ensure_trigram_fts(conn)?;
-    conn.execute_batch(
-        r#"
-        CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
-            INSERT INTO files_fts(rowid, name, path)
-            VALUES (new.rowid, new.name, new.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, path)
-            VALUES('delete', old.rowid, old.name, old.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, path)
-            VALUES('delete', old.rowid, old.name, old.path);
-            INSERT INTO files_fts(rowid, name, path)
-            VALUES (new.rowid, new.name, new.path);
-        END;
-        "#,
-    )?;
-    Ok(())
-}
-
-fn ensure_file_classification_columns(conn: &Connection) -> Result<(), DbError> {
-    add_column_if_missing(
-        conn,
-        "ctime",
-        "ALTER TABLE files ADD COLUMN ctime INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        conn,
-        "file_type",
-        "ALTER TABLE files ADD COLUMN file_type TEXT NOT NULL DEFAULT 'Other'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "purpose",
-        "ALTER TABLE files ADD COLUMN purpose TEXT NOT NULL DEFAULT 'Unknown'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "lifecycle",
-        "ALTER TABLE files ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Inbox'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "context",
-        "ALTER TABLE files ADD COLUMN context TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "risk_level",
-        "ALTER TABLE files ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'Normal'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "suggested_action",
-        "ALTER TABLE files ADD COLUMN suggested_action TEXT NOT NULL DEFAULT 'Keep'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "suggested_target_path",
-        "ALTER TABLE files ADD COLUMN suggested_target_path TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "suggested_name",
-        "ALTER TABLE files ADD COLUMN suggested_name TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "confidence",
-        "ALTER TABLE files ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5",
-    )?;
-    add_column_if_missing(
-        conn,
-        "classification_reason",
-        "ALTER TABLE files ADD COLUMN classification_reason TEXT NOT NULL DEFAULT 'Indexed by Zen Canvas Tauri backend.'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "matched_rules",
-        "ALTER TABLE files ADD COLUMN matched_rules TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "requires_confirmation",
-        "ALTER TABLE files ADD COLUMN requires_confirmation INTEGER NOT NULL DEFAULT 0",
-    )?;
-    Ok(())
-}
-
-fn add_column_if_missing(conn: &Connection, column: &str, alter_sql: &str) -> Result<(), DbError> {
-    let exists = conn
-        .prepare("PRAGMA table_info(files)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(column));
-
-    if !exists {
-        conn.execute_batch(alter_sql)?;
-    }
-    Ok(())
-}
-
 static FTS5_CHECKED: OnceLock<()> = OnceLock::new();
 
 fn assert_fts5_available(conn: &Connection) -> Result<(), DbError> {
@@ -805,6 +676,117 @@ fn assert_fts5_available(conn: &Connection) -> Result<(), DbError> {
             "#,
         )?;
         let _ = FTS5_CHECKED.set(());
+    }
+    Ok(())
+}
+
+fn schema_version(conn: &Connection) -> Result<i32, DbError> {
+    conn.query_row("SELECT user_version FROM pragma_user_version", [], |row| {
+        row.get(0)
+    })
+    .map_err(DbError::from)
+}
+
+fn set_schema_version(conn: &Connection, version: i32) -> Result<(), DbError> {
+    // PRAGMA user_version 不支持参数绑定，用格式化字符串（整数无 SQL 注入风险）
+    conn.execute_batch(&format!("PRAGMA user_version = {version}"))
+        .map_err(DbError::from)
+}
+
+fn migrate(conn: &Connection) -> Result<(), DbError> {
+    assert_fts5_available(conn)?;
+    let version = schema_version(conn)?;
+    if version >= CURRENT_SCHEMA_VERSION {
+        return Ok(());
+    }
+    if version < 1 {
+        // 建表 + 基础索引
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS files (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                extension TEXT NOT NULL DEFAULT '',
+                size INTEGER NOT NULL DEFAULT 0,
+                mtime INTEGER NOT NULL DEFAULT 0,
+                is_dir INTEGER NOT NULL DEFAULT 0 CHECK (is_dir IN (0, 1)),
+                state_code INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+            CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
+            CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
+            CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
+            "#,
+        )?;
+        set_schema_version(conn, 1)?;
+    }
+    if version < 2 {
+        // 分类字段 + FTS + 触发器
+        execute_column_migrations(
+            conn,
+            &[
+                "ALTER TABLE files ADD COLUMN file_type TEXT NOT NULL DEFAULT 'Other';",
+                "ALTER TABLE files ADD COLUMN purpose TEXT NOT NULL DEFAULT 'Unknown';",
+                "ALTER TABLE files ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Inbox';",
+                "ALTER TABLE files ADD COLUMN context TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE files ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'Normal';",
+                "ALTER TABLE files ADD COLUMN suggested_action TEXT NOT NULL DEFAULT 'Keep';",
+                "ALTER TABLE files ADD COLUMN suggested_target_path TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE files ADD COLUMN suggested_name TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE files ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;",
+                "ALTER TABLE files ADD COLUMN classification_reason TEXT NOT NULL DEFAULT 'Indexed by Zen Canvas Tauri backend.';",
+                "ALTER TABLE files ADD COLUMN matched_rules TEXT NOT NULL DEFAULT '[]';",
+                "ALTER TABLE files ADD COLUMN requires_confirmation INTEGER NOT NULL DEFAULT 0;",
+            ],
+        )?;
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type);
+            CREATE INDEX IF NOT EXISTS idx_files_purpose ON files(purpose);
+            CREATE INDEX IF NOT EXISTS idx_files_lifecycle ON files(lifecycle);
+            CREATE INDEX IF NOT EXISTS idx_files_risk_level ON files(risk_level);
+            CREATE INDEX IF NOT EXISTS idx_files_requires_confirmation ON files(requires_confirmation);
+            "#,
+        )?;
+        ensure_trigram_fts(conn)?;
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
+                INSERT INTO files_fts(rowid, name, path) VALUES (new.rowid, new.name, new.path);
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, path)
+                VALUES('delete', old.rowid, old.name, old.path);
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, path)
+                VALUES('delete', old.rowid, old.name, old.path);
+                INSERT INTO files_fts(rowid, name, path) VALUES (new.rowid, new.name, new.path);
+            END;
+            "#,
+        )?;
+        set_schema_version(conn, 2)?;
+    }
+    if version < 3 {
+        // 新增 ctime 字段（真实创建时间）
+        execute_column_migrations(
+            conn,
+            &["ALTER TABLE files ADD COLUMN ctime INTEGER NOT NULL DEFAULT 0;"],
+        )?;
+        set_schema_version(conn, 3)?;
+    }
+    Ok(())
+}
+
+fn execute_column_migrations(conn: &Connection, statements: &[&str]) -> Result<(), DbError> {
+    for statement in statements {
+        match conn.execute_batch(statement) {
+            Ok(()) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("duplicate column name") => {}
+            Err(error) => return Err(DbError::Sqlite(error)),
+        }
     }
     Ok(())
 }
@@ -2052,7 +2034,7 @@ mod tests {
     ) {
         db.insert_file(InsertFileRequest {
             id: id.to_string(),
-            path: format!("C:/Users/77588/Documents/{name}"),
+            path: format!("/test/virtual/documents/{name}"),
             name: name.to_string(),
             extension: extension.to_string(),
             size,
