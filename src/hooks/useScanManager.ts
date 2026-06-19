@@ -37,6 +37,7 @@ export function useScanManager({
       void onRefreshData();
     }
   });
+  const { startScan, reset, ...scanStateData } = scanState;
 
   const askForScanPath = useCallback(
     () => window.prompt(t("folderPickerTitle"), selectedFolders[0] ?? "")?.trim() ?? "",
@@ -51,9 +52,9 @@ export function useScanManager({
       }
       setSelectedFolders([path]);
       setIsScanning(true);
-      scanState.reset();
+      reset();
       try {
-        const summary = await scanState.startScan(path);
+        const summary = await startScan(path);
         await onRefreshData();
         onSuccess(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
       } catch (error) {
@@ -62,7 +63,7 @@ export function useScanManager({
         setIsScanning(false);
       }
     },
-    [onError, onRefreshData, onSuccess, scanState, t]
+    [onError, onRefreshData, onSuccess, reset, startScan, t]
   );
 
   const handleScan = useCallback(async () => {

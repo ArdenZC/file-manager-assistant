@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { tauriApi } from "../api/tauriApi";
 import type { FileRecord, OperationLog, OperationPreview, Rule } from "../types/domain";
 import type { Translator } from "../types/ui";
@@ -41,7 +41,7 @@ export function useOperationQueue({
     setPreviewNameOverrides({});
   }, [previews]);
 
-  async function runDispatch() {
+  const runDispatch = useCallback(async () => {
     try {
       const summary = await tauriApi.executeRulesOnInbox(rules);
       await onRefreshData();
@@ -51,9 +51,9 @@ export function useOperationQueue({
       onError(readableError(error));
       throw error;
     }
-  }
+  }, [onError, onRefreshData, onSuccess, rules, t]);
 
-  async function executeSelected() {
+  const executeSelected = useCallback(async () => {
     const operations = displayPreviews.filter(
       (preview) => selectedOperationIds.has(preview.id) && preview.is_executable !== false
     );
@@ -67,9 +67,9 @@ export function useOperationQueue({
     } catch (error) {
       onError(readableError(error));
     }
-  }
+  }, [displayPreviews, onError, onRefreshData, onSuccess, selectedOperationIds, t]);
 
-  async function restoreOperationLogs(logs: OperationLog[]) {
+  const restoreOperationLogs = useCallback(async (logs: OperationLog[]) => {
     if (!logs.length) return;
     try {
       const result = await tauriApi.restoreMoves(logs);
@@ -80,7 +80,7 @@ export function useOperationQueue({
     } catch (error) {
       onError(readableError(error));
     }
-  }
+  }, [onError, onRefreshData, onSuccess, t]);
 
   function onRenamePreview(id: string, name: string) {
     setPreviewNameOverrides((current) => ({ ...current, [id]: name }));
