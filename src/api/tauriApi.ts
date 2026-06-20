@@ -138,6 +138,10 @@ export const tauriApi = {
     return invokeCommand<number>("remove_files_by_paths", { paths });
   },
 
+  upsertFilesByPaths(paths: string[]): Promise<number> {
+    return invokeCommand<number>("upsert_files_by_paths", { paths });
+  },
+
   onScanProgress(handler: EventHandler<ScanProgressPayload>): Promise<UnlistenFn> {
     return listenTo("scan-progress", handler);
   },

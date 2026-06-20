@@ -2,53 +2,43 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { tauriApi } from "../api/tauriApi";
 import { readableError } from "../utils/viewHelpers";
-
-interface FsWatchEvent {
-  eventType?: string;
-  event_type?: string;
-  paths?: string[];
-  path?: string;
-  deleted?: boolean;
-  removed?: boolean;
-  isDeleted?: boolean;
-}
+import {
+  classifyFsWatchEvent,
+  eventPaths,
+  mergeWatcherQueues,
+  type FsWatchEvent
+} from "./fsWatcherQueue";
 
 interface FsWatcherOptions {
   onRefreshData: () => Promise<void>;
   onError?: (message: string) => void;
 }
 
-function isRemoveEvent(payload: FsWatchEvent): boolean {
-  const eventType = String(payload.eventType ?? payload.event_type ?? "").toLowerCase();
-  return (
-    eventType.includes("remove") ||
-    eventType.includes("delete") ||
-    payload.deleted === true ||
-    payload.removed === true ||
-    payload.isDeleted === true
-  );
-}
-
-function eventPaths(payload: FsWatchEvent): string[] {
-  const paths = Array.isArray(payload.paths) ? payload.paths : payload.path ? [payload.path] : [];
-  return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
-}
+const WATCHER_FLUSH_DELAY_MS = 500;
 
 export function useFsWatcher({ onRefreshData, onError }: FsWatcherOptions) {
   useEffect(() => {
     let disposed = false;
     let queue = Promise.resolve();
-    const unlistenPromise = listen<FsWatchEvent>("fs-event", (event) => {
-      const payload = event.payload;
-      if (!payload || !isRemoveEvent(payload)) return;
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    let staleQueue = new Set<string>();
+    let upsertQueue = new Set<string>();
 
-      const paths = eventPaths(payload);
-      if (!paths.length) return;
-
+    const flushQueues = () => {
       queue = queue
         .then(async () => {
-          const affected = await tauriApi.markFilesStaleByPaths(paths);
-          if (affected > 0 && !disposed) {
+          const snapshot = mergeWatcherQueues(staleQueue, upsertQueue);
+          staleQueue = new Set();
+          upsertQueue = new Set();
+
+          let changed = false;
+          if (snapshot.stale.length > 0) {
+            changed = (await tauriApi.markFilesStaleByPaths(snapshot.stale)) > 0 || changed;
+          }
+          if (snapshot.upsert.length > 0) {
+            changed = (await tauriApi.upsertFilesByPaths(snapshot.upsert)) > 0 || changed;
+          }
+          if (changed && !disposed) {
             await onRefreshData();
           }
         })
@@ -57,10 +47,43 @@ export function useFsWatcher({ onRefreshData, onError }: FsWatcherOptions) {
             onError?.(readableError(error));
           }
         });
+    };
+
+    const scheduleFlush = () => {
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer);
+      }
+      flushTimer = setTimeout(() => {
+        flushTimer = undefined;
+        flushQueues();
+      }, WATCHER_FLUSH_DELAY_MS);
+    };
+
+    const unlistenPromise = listen<FsWatchEvent>("fs-event", (event) => {
+      const payload = event.payload;
+      if (!payload) return;
+
+      const paths = eventPaths(payload);
+      if (!paths.length) return;
+      const action = classifyFsWatchEvent(payload);
+      if (action === "ignore") return;
+
+      for (const path of paths) {
+        if (action === "stale") {
+          staleQueue.add(path);
+        } else {
+          upsertQueue.add(path);
+          staleQueue.delete(path);
+        }
+      }
+      scheduleFlush();
     });
 
     return () => {
       disposed = true;
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer);
+      }
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [onError, onRefreshData]);

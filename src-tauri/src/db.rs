@@ -360,6 +360,10 @@ impl Database {
         Ok(removed)
     }
 
+    pub fn upsert_files_by_paths(&self, paths: &[String]) -> Result<usize, DbError> {
+        upsert_files_by_paths_for_db(self, paths)
+    }
+
     pub fn update_file_after_successful_operation(
         &self,
         file_id: &str,
@@ -986,6 +990,11 @@ pub fn remove_files_by_paths(db: State<'_, Database>, paths: Vec<String>) -> Res
 }
 
 #[tauri::command]
+pub fn upsert_files_by_paths(db: State<'_, Database>, paths: Vec<String>) -> Result<usize, String> {
+    db.upsert_files_by_paths(&paths).map_err(command_error)
+}
+
+#[tauri::command]
 pub fn search_files(
     db: State<'_, Database>,
     query: String,
@@ -1421,6 +1430,91 @@ fn parse_optional_operation_timestamp(value: &str) -> Option<i64> {
 
 fn command_error(error: DbError) -> String {
     error.to_string()
+}
+
+pub fn upsert_files_by_paths_for_db(db: &Database, paths: &[String]) -> Result<usize, DbError> {
+    let mut files = Vec::new();
+    let mut seen = Vec::new();
+
+    for raw_path in paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+    {
+        let path = trim_trailing_path_separators(raw_path);
+        if path.is_empty() {
+            continue;
+        }
+
+        let path_buf = PathBuf::from(path);
+        let metadata = match fs::metadata(&path_buf) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(DbError::Io(error)),
+        };
+        let normalized_path = normalize_path_for_db(&path_buf);
+        if seen.iter().any(|value| value == &normalized_path) {
+            continue;
+        }
+        push_unique(&mut seen, normalized_path.clone());
+
+        files.push(insert_request_from_metadata(
+            normalized_path,
+            &path_buf,
+            &metadata,
+        ));
+    }
+
+    let upserted = files.len();
+    if upserted > 0 {
+        db.insert_files(&files)?;
+    }
+    Ok(upserted)
+}
+
+fn insert_request_from_metadata(
+    normalized_path: String,
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> InsertFileRequest {
+    let is_dir = metadata.is_dir();
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| resolved_file_name(&normalized_path, ""));
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let size = if metadata.is_file() {
+        i64::try_from(metadata.len()).unwrap_or(i64::MAX)
+    } else {
+        0
+    };
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(system_time_to_unix_seconds)
+        .unwrap_or_else(current_unix_seconds);
+    let ctime = metadata
+        .created()
+        .ok()
+        .and_then(system_time_to_unix_seconds)
+        .unwrap_or(mtime);
+
+    InsertFileRequest {
+        id: normalized_path.clone(),
+        path: normalized_path,
+        name,
+        extension,
+        size,
+        mtime,
+        ctime,
+        is_dir,
+        state_code: 0,
+    }
 }
 
 fn indexed_file_from_row(row: &Row<'_>) -> rusqlite::Result<IndexedFileRow> {
@@ -2438,7 +2532,11 @@ fn current_timestamp_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        fs,
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn get_paged_files_returns_limit_and_offset() {
@@ -2642,6 +2740,101 @@ mod tests {
         assert_eq!(summary.scanned, 0);
         assert_eq!(summary.updated, 0);
         assert_eq!(row, ("Unknown".to_string(), "Inbox".to_string(), true));
+    }
+
+    #[test]
+    fn upsert_files_by_paths_inserts_new_file() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let root = test_dir();
+        let file = root.join("new-report.txt");
+        fs::write(&file, "hello").expect("write file");
+
+        let upserted = upsert_files_by_paths_for_db(&db, &[file.to_string_lossy().into_owned()])
+            .expect("upsert paths");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(upserted, 1);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].name, "new-report.txt");
+        assert_eq!(page.files[0].path, normalized_test_path(&file));
+        assert!(!page.files[0].is_stale);
+    }
+
+    #[test]
+    fn upsert_files_by_paths_updates_modified_file() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let root = test_dir();
+        let file = root.join("notes.txt");
+        fs::write(&file, "old").expect("write file");
+        let path = normalized_test_path(&file);
+        db.insert_file(InsertFileRequest {
+            id: path.clone(),
+            path: path.clone(),
+            name: "notes.txt".to_string(),
+            extension: "txt".to_string(),
+            size: 3,
+            mtime: 1,
+            ctime: 1,
+            is_dir: false,
+            state_code: 0,
+        })
+        .expect("insert old file");
+        fs::write(&file, "new content").expect("modify file");
+
+        let upserted = upsert_files_by_paths_for_db(&db, &[file.to_string_lossy().into_owned()])
+            .expect("upsert paths");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(upserted, 1);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].size, 11);
+        assert!(page.files[0].modified_at.len() > 0);
+    }
+
+    #[test]
+    fn upsert_files_by_paths_revives_stale_file() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let root = test_dir();
+        let file = root.join("revived.txt");
+        fs::write(&file, "hello").expect("write file");
+        let path = normalized_test_path(&file);
+        db.insert_file(InsertFileRequest {
+            id: path.clone(),
+            path: path.clone(),
+            name: "revived.txt".to_string(),
+            extension: "txt".to_string(),
+            size: 5,
+            mtime: 1,
+            ctime: 1,
+            is_dir: false,
+            state_code: 0,
+        })
+        .expect("insert file");
+        db.remove_files_by_paths(&[path.clone()])
+            .expect("mark stale");
+
+        let upserted = upsert_files_by_paths_for_db(&db, &[file.to_string_lossy().into_owned()])
+            .expect("upsert paths");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(upserted, 1);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].path, path);
+        assert_eq!(stale_state(&db, &page.files[0].path), Some((false, true)));
+    }
+
+    #[test]
+    fn upsert_files_by_paths_ignores_missing_path() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let root = test_dir();
+        let missing = root.join("missing.txt");
+
+        let upserted = upsert_files_by_paths_for_db(&db, &[missing.to_string_lossy().into_owned()])
+            .expect("upsert paths");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(upserted, 0);
+        assert_eq!(page.total, 0);
     }
 
     #[test]
@@ -3047,5 +3240,19 @@ mod tests {
             .expect("clock")
             .as_nanos();
         std::env::temp_dir().join(format!("zen-canvas-db-test-{nonce}.sqlite3"))
+    }
+
+    fn test_dir() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("zen-canvas-db-file-test-{nonce}"));
+        fs::create_dir_all(&dir).expect("test dir");
+        dir
+    }
+
+    fn normalized_test_path(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
     }
 }

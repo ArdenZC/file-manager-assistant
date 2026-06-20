@@ -10,8 +10,8 @@ use tauri::{AppHandle, Manager, Runtime};
 
 pub use db::{
     execute_rules_on_inbox, get_operation_logs, get_paged_files, get_stats_summary, init_db,
-    insert_file, search_files, FileRecordDto, FileSearchResult, InsertFileRequest,
-    PagedFilesResult, Rule, RuleExecutionSummary, StatsSummary,
+    insert_file, search_files, upsert_files_by_paths, FileRecordDto, FileSearchResult,
+    InsertFileRequest, PagedFilesResult, Rule, RuleExecutionSummary, StatsSummary,
 };
 pub use file_ops::{
     execute_moves, move_file, rename_file, restore_moves, ExecuteMovesRequest, ExecuteMovesResult,
