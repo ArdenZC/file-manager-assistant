@@ -10,10 +10,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::Disks;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Runtime, State};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -67,6 +67,8 @@ struct IndexedFileRow {
 }
 
 const CLASSIFY_BATCH_SIZE: usize = 500;
+const OPTIMIZE_AFTER_UPSERT_THRESHOLD: usize = 500;
+pub const SEARCH_INDEX_OPTIMIZED_EVENT: &str = "search-index-optimized";
 
 /// 当前期望的 schema 版本号，每次需要改动 schema 时 +1
 const CURRENT_SCHEMA_VERSION: i32 = 6;
@@ -230,6 +232,15 @@ pub struct RuleExecutionSummary {
     pub needs_confirmation: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchIndexOptimizeReport {
+    pub trigger: String,
+    pub duration_ms: u128,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref().to_path_buf();
@@ -367,7 +378,14 @@ impl Database {
     }
 
     pub fn upsert_files_by_paths(&self, paths: &[String]) -> Result<usize, DbError> {
-        upsert_files_by_paths_for_db(self, paths)
+        upsert_files_by_paths_with_optional_optimize(self, paths)
+    }
+
+    pub fn optimize_search_index(&self) -> Result<u128, DbError> {
+        let started = Instant::now();
+        let conn = self.conn()?;
+        conn.execute_batch("PRAGMA optimize;")?;
+        Ok(started.elapsed().as_millis())
     }
 
     pub fn update_file_after_successful_operation(
@@ -1100,8 +1118,17 @@ pub fn remove_files_by_paths(db: State<'_, Database>, paths: Vec<String>) -> Res
 }
 
 #[tauri::command]
-pub fn upsert_files_by_paths(db: State<'_, Database>, paths: Vec<String>) -> Result<usize, String> {
-    db.upsert_files_by_paths(&paths).map_err(command_error)
+pub fn upsert_files_by_paths<R: Runtime>(
+    app: AppHandle<R>,
+    db: State<'_, Database>,
+    paths: Vec<String>,
+) -> Result<usize, String> {
+    let db = db.inner();
+    let upserted = upsert_files_by_paths_for_db(db, &paths).map_err(command_error)?;
+    if let Some(report) = optimize_search_index_after_bulk_upsert(db, upserted) {
+        emit_search_index_optimized(&app, &report);
+    }
+    Ok(upserted)
 }
 
 #[tauri::command]
@@ -1666,6 +1693,60 @@ pub fn upsert_files_by_paths_for_db(db: &Database, paths: &[String]) -> Result<u
         db.insert_files(&files)?;
     }
     Ok(upserted)
+}
+
+fn upsert_files_by_paths_with_optional_optimize(
+    db: &Database,
+    paths: &[String],
+) -> Result<usize, DbError> {
+    let upserted = upsert_files_by_paths_for_db(db, paths)?;
+    let _ = optimize_search_index_after_bulk_upsert(db, upserted);
+    Ok(upserted)
+}
+
+fn optimize_search_index_after_bulk_upsert(
+    db: &Database,
+    upserted: usize,
+) -> Option<SearchIndexOptimizeReport> {
+    if upserted >= OPTIMIZE_AFTER_UPSERT_THRESHOLD {
+        Some(run_search_index_optimize("watcher_bulk_upsert", db))
+    } else {
+        None
+    }
+}
+
+pub fn run_search_index_optimize(trigger: &str, db: &Database) -> SearchIndexOptimizeReport {
+    let started = Instant::now();
+    match db.optimize_search_index() {
+        Ok(duration_ms) => SearchIndexOptimizeReport {
+            trigger: trigger.to_string(),
+            duration_ms,
+            success: true,
+            error: None,
+        },
+        Err(error) => {
+            let message = error.to_string();
+            eprintln!("SQLite/FTS optimize failed for {trigger}: {message}");
+            SearchIndexOptimizeReport {
+                trigger: trigger.to_string(),
+                duration_ms: started.elapsed().as_millis(),
+                success: false,
+                error: Some(message),
+            }
+        }
+    }
+}
+
+pub fn emit_search_index_optimized<R: Runtime>(
+    app: &AppHandle<R>,
+    report: &SearchIndexOptimizeReport,
+) {
+    if let Err(error) = app.emit(SEARCH_INDEX_OPTIMIZED_EVENT, report) {
+        eprintln!(
+            "Failed to emit {SEARCH_INDEX_OPTIMIZED_EVENT} event for {}: {error}",
+            report.trigger
+        );
+    }
 }
 
 fn insert_request_from_metadata(
@@ -2902,6 +2983,38 @@ mod tests {
     }
 
     #[test]
+    fn optimize_search_index_returns_duration() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file(
+            &db,
+            "file-report",
+            "report.txt",
+            "txt",
+            2_048,
+            1_900_000_000,
+        );
+
+        let duration_ms = db.optimize_search_index().expect("optimize search index");
+        let results = db.search_files("report", Some(10)).expect("search");
+
+        assert!(duration_ms <= 60_000);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "report.txt");
+    }
+
+    #[test]
+    fn run_search_index_optimize_reports_success() {
+        let db = Database::open(test_db_path()).expect("open test database");
+
+        let report = run_search_index_optimize("scan_complete", &db);
+
+        assert_eq!(report.trigger, "scan_complete");
+        assert!(report.success);
+        assert!(report.duration_ms <= 60_000);
+        assert!(report.error.is_none());
+    }
+
+    #[test]
     fn stats_excludes_stale_files() {
         let db = Database::open(test_db_path()).expect("open test database");
         insert_test_file(
@@ -3318,6 +3431,25 @@ mod tests {
 
         assert_eq!(upserted, 0);
         assert_eq!(page.total, 0);
+    }
+
+    #[test]
+    fn upsert_files_by_paths_with_optional_optimize_handles_large_batch() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let root = test_dir();
+        let mut paths = Vec::with_capacity(OPTIMIZE_AFTER_UPSERT_THRESHOLD);
+        for index in 0..OPTIMIZE_AFTER_UPSERT_THRESHOLD {
+            let file = root.join(format!("large-upsert-{index:04}.txt"));
+            fs::write(&file, format!("file {index}")).expect("write file");
+            paths.push(file.to_string_lossy().into_owned());
+        }
+
+        let upserted =
+            upsert_files_by_paths_with_optional_optimize(&db, &paths).expect("upsert paths");
+        let page = db.get_paged_files(Some(1), Some(0), None).expect("page");
+
+        assert_eq!(upserted, OPTIMIZE_AFTER_UPSERT_THRESHOLD);
+        assert_eq!(page.total, OPTIMIZE_AFTER_UPSERT_THRESHOLD as i64);
     }
 
     #[test]

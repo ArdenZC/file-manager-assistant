@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const root = process.cwd();
 
@@ -31,4 +32,38 @@ assert(!app.includes("snapshot") && !appViews.includes("snapshot"), "Runtime UI 
 
 if (!process.exitCode) {
   console.log("Architecture guard passed: paged IPC, bounded library loading, and no legacy full snapshot path.");
+} else {
+  process.exit(process.exitCode);
 }
+
+console.log("Running SQLite/FTS benchmark...");
+
+const benchmark = spawnSync(
+  "cargo",
+  [
+    "test",
+    "--release",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "fts_benchmark_100k",
+    "--",
+    "--ignored",
+    "--nocapture",
+  ],
+  {
+    cwd: root,
+    stdio: "inherit",
+  },
+);
+
+if (benchmark.error) {
+  console.error(`SQLite/FTS benchmark failed to start: ${benchmark.error.message}`);
+  process.exit(1);
+}
+
+if (benchmark.status !== 0) {
+  console.error(`SQLite/FTS benchmark failed with exit code ${benchmark.status}.`);
+  process.exit(benchmark.status ?? 1);
+}
+
+console.log("SQLite/FTS benchmark passed.");

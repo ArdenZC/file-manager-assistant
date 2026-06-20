@@ -1,4 +1,6 @@
-use crate::db::{Database, DbError, InsertFileRequest};
+use crate::db::{
+    emit_search_index_optimized, run_search_index_optimize, Database, DbError, InsertFileRequest,
+};
 use crate::path_filter::is_ignored_dir_name;
 use jwalk::{ClientState, DirEntry, WalkDir};
 use serde::Serialize;
@@ -222,6 +224,11 @@ fn scan_directory_blocking<R: Runtime>(
         batch.flush(&context, skipped.load(Ordering::Relaxed))?;
     }
 
+    if batch.flushed_batches() > 0 {
+        let report = run_search_index_optimize("scan_complete", &db);
+        emit_search_index_optimized(&app, &report);
+    }
+
     let summary = progress_payload(
         &root_label,
         &counters,
@@ -261,6 +268,10 @@ impl ScanBatchBuffer {
 
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    fn flushed_batches(&self) -> u64 {
+        self.batch_index
     }
 
     fn should_flush(&self, now: Instant) -> bool {
