@@ -785,6 +785,44 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_operation_restore_logs(&self, logs: &[OperationLogDto]) -> Result<(), DbError> {
+        if logs.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                UPDATE operation_logs
+                SET can_restore = ?2,
+                    restored_at = ?3,
+                    restore_status = ?4,
+                    restore_error = ?5,
+                    can_undo = ?6
+                WHERE id = ?1
+                "#,
+            )?;
+
+            for log in logs {
+                stmt.execute(params![
+                    log.id,
+                    bool_to_i64(log.can_restore),
+                    log.restored_at
+                        .as_deref()
+                        .and_then(parse_optional_operation_timestamp),
+                    log.restore_status,
+                    log.restore_error,
+                    bool_to_i64(log.can_undo)
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     fn conn(&self) -> Result<PooledConnection<SqliteConnectionManager>, DbError> {
         self.pool.get().map_err(DbError::from)
     }
@@ -2466,6 +2504,72 @@ mod tests {
         );
         assert!(!logs[0].can_restore);
         assert_eq!(operation_batch_status(&db, "batch-skipped"), "success");
+    }
+
+    #[test]
+    fn update_operation_restore_logs_marks_restored_log() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let mut log = operation_log("log-restored", "batch-restored", "success");
+        db.save_operation_logs("batch-restored", &[log.clone()])
+            .expect("save operation logs");
+
+        log.can_undo = false;
+        log.can_restore = false;
+        log.restored_at = Some("1900000000999".to_string());
+        log.restore_status = "restored".to_string();
+        log.restore_error = None;
+        db.update_operation_restore_logs(&[log])
+            .expect("update restore logs");
+
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+        assert_eq!(logs[0].restore_status, "restored");
+        assert!(!logs[0].can_restore);
+        assert!(!logs[0].can_undo);
+        assert_eq!(logs[0].restored_at.as_deref(), Some("1900000000999"));
+        assert!(logs[0].restore_error.is_none());
+    }
+
+    #[test]
+    fn update_operation_restore_logs_marks_failed_log() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let mut log = operation_log("log-restore-failed", "batch-restore-failed", "success");
+        db.save_operation_logs("batch-restore-failed", &[log.clone()])
+            .expect("save operation logs");
+
+        log.restore_status = "failed".to_string();
+        log.restore_error = Some("Target file already exists.".to_string());
+        db.update_operation_restore_logs(&[log])
+            .expect("update restore logs");
+
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+        assert_eq!(logs[0].restore_status, "failed");
+        assert_eq!(
+            logs[0].restore_error.as_deref(),
+            Some("Target file already exists.")
+        );
+    }
+
+    #[test]
+    fn update_operation_restore_logs_marks_unavailable_log() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let mut log = operation_log("log-unavailable", "batch-unavailable", "skipped");
+        log.can_undo = false;
+        log.can_restore = false;
+        db.save_operation_logs("batch-unavailable", &[log.clone()])
+            .expect("save operation logs");
+
+        log.restore_status = "unavailable".to_string();
+        log.restore_error = Some("Only successful operations can be restored.".to_string());
+        db.update_operation_restore_logs(&[log])
+            .expect("update restore logs");
+
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+        assert_eq!(logs[0].restore_status, "unavailable");
+        assert!(!logs[0].can_restore);
+        assert_eq!(
+            logs[0].restore_error.as_deref(),
+            Some("Only successful operations can be restored.")
+        );
     }
 
     #[test]

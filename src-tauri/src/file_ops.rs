@@ -243,7 +243,19 @@ fn execute_preview_operation(
 }
 
 #[command]
-pub fn restore_moves(request: RestoreMovesRequest) -> Result<RestoreMovesResult, String> {
+pub fn restore_moves(
+    db: State<'_, Database>,
+    request: RestoreMovesRequest,
+) -> Result<RestoreMovesResult, String> {
+    let result = restore_moves_core(request);
+    db.update_operation_restore_logs(&result.logs)
+        .map_err(|error| {
+            format!("restore completed but failed to persist restore status: {error}")
+        })?;
+    Ok(result)
+}
+
+pub fn restore_moves_core(request: RestoreMovesRequest) -> RestoreMovesResult {
     let mut restored = 0_usize;
     let mut failed = 0_usize;
     let logs = request
@@ -260,11 +272,11 @@ pub fn restore_moves(request: RestoreMovesRequest) -> Result<RestoreMovesResult,
         })
         .collect::<Vec<_>>();
 
-    Ok(RestoreMovesResult {
+    RestoreMovesResult {
         logs,
         restored,
         failed,
-    })
+    }
 }
 
 fn make_operation_log(
@@ -659,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_moves_restores_successful_move_log() {
+    fn restore_moves_core_restores_successful_move_log() {
         let root = test_dir();
         let source_dir = root.join("source");
         let target_dir = root.join("target");
@@ -683,10 +695,9 @@ mod tests {
             }],
         });
 
-        let restored = restore_moves(RestoreMovesRequest {
+        let restored = restore_moves_core(RestoreMovesRequest {
             logs: executed.logs.clone(),
-        })
-        .expect("restore moves");
+        });
 
         assert!(source.exists());
         assert!(!target.exists());
@@ -724,10 +735,9 @@ mod tests {
         });
 
         fs::write(&source, "new file").expect("write conflicting source");
-        let restored = restore_moves(RestoreMovesRequest {
+        let restored = restore_moves_core(RestoreMovesRequest {
             logs: executed.logs.clone(),
-        })
-        .expect("restore moves");
+        });
 
         assert_eq!(
             fs::read_to_string(&source).expect("read conflict"),
@@ -769,10 +779,9 @@ mod tests {
         assert!(!source.exists());
         assert!(renamed.exists());
 
-        let restored = restore_moves(RestoreMovesRequest {
+        let restored = restore_moves_core(RestoreMovesRequest {
             logs: executed.logs.clone(),
-        })
-        .expect("restore rename");
+        });
 
         assert!(source.exists());
         assert!(!renamed.exists());
