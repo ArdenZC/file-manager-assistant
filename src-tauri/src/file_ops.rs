@@ -273,7 +273,24 @@ pub fn restore_moves(
     db: State<'_, Database>,
     request: RestoreMovesRequest,
 ) -> Result<RestoreMovesResult, String> {
+    restore_moves_with_persistence(db.inner(), request)
+}
+
+pub fn restore_moves_with_persistence(
+    db: &Database,
+    request: RestoreMovesRequest,
+) -> Result<RestoreMovesResult, String> {
     let result = restore_moves_core(request);
+    for log in result
+        .logs
+        .iter()
+        .filter(|log| log.restore_status == "restored")
+    {
+        if let Err(error) = db.update_file_after_successful_restore(log) {
+            eprintln!("restore file index sync failed: {error}");
+        }
+    }
+
     db.update_operation_restore_logs(&result.logs)
         .map_err(|error| {
             format!("restore completed but failed to persist restore status: {error}")
@@ -969,6 +986,199 @@ mod tests {
         assert_eq!(logs[0].id, result.logs[0].id);
         assert_eq!(page.total, 0);
         assert!(target.exists());
+    }
+
+    #[test]
+    fn restore_moves_updates_file_record_after_move_restore() {
+        let db = Database::open(test_db_path()).expect("open database");
+        let root = test_dir();
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&target_dir).expect("target dir");
+        let source = source_dir.join("a.txt");
+        let target = target_dir.join("a.txt");
+        fs::write(&source, "hello").expect("write source");
+        insert_indexed_file(&db, &source, "a.txt", "txt");
+
+        let executed = execute_moves_with_persistence(
+            &db,
+            ExecuteMovesRequest {
+                operations: vec![OperationPreviewRequest {
+                    id: "op-move".to_string(),
+                    file_id: source.to_string_lossy().into_owned(),
+                    operation_type: "move".to_string(),
+                    source_path: source.to_string_lossy().into_owned(),
+                    target_path: target.to_string_lossy().into_owned(),
+                    old_name: "a.txt".to_string(),
+                    new_name: "a.txt".to_string(),
+                    is_executable: Some(true),
+                }],
+            },
+        )
+        .expect("execute moves with persistence");
+
+        restore_moves_with_persistence(
+            &db,
+            RestoreMovesRequest {
+                logs: executed.logs.clone(),
+            },
+        )
+        .expect("restore moves with persistence");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].path, normalize_path(&source));
+        assert_eq!(page.files[0].id, normalize_path(&source));
+        assert_eq!(page.files[0].name, "a.txt");
+        assert_eq!(page.files[0].extension, "txt");
+        assert_eq!(page.files[0].suggested_action, "Keep");
+        assert!(!page.files[0].requires_confirmation);
+    }
+
+    #[test]
+    fn restore_moves_updates_file_record_after_rename_restore() {
+        let db = Database::open(test_db_path()).expect("open database");
+        let root = test_dir();
+        let source = root.join("old-name.txt");
+        let renamed = root.join("new-name.txt");
+        fs::write(&source, "hello").expect("write source");
+        insert_indexed_file(&db, &source, "old-name.txt", "txt");
+
+        let executed = execute_moves_with_persistence(
+            &db,
+            ExecuteMovesRequest {
+                operations: vec![OperationPreviewRequest {
+                    id: "op-rename".to_string(),
+                    file_id: source.to_string_lossy().into_owned(),
+                    operation_type: "rename".to_string(),
+                    source_path: source.to_string_lossy().into_owned(),
+                    target_path: renamed.to_string_lossy().into_owned(),
+                    old_name: "old-name.txt".to_string(),
+                    new_name: "new-name.txt".to_string(),
+                    is_executable: Some(true),
+                }],
+            },
+        )
+        .expect("execute moves with persistence");
+
+        let after_execute = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        assert_eq!(after_execute.files[0].name, "new-name.txt");
+
+        restore_moves_with_persistence(
+            &db,
+            RestoreMovesRequest {
+                logs: executed.logs.clone(),
+            },
+        )
+        .expect("restore moves with persistence");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].name, "old-name.txt");
+        assert_eq!(page.files[0].path, normalize_path(&source));
+        assert_eq!(page.files[0].id, normalize_path(&source));
+        assert_eq!(page.files[0].extension, "txt");
+    }
+
+    #[test]
+    fn restore_moves_updates_fts_after_restore() {
+        let db = Database::open(test_db_path()).expect("open database");
+        let root = test_dir();
+        let source = root.join("old-report.txt");
+        let renamed = root.join("new-report.txt");
+        fs::write(&source, "hello").expect("write source");
+        insert_indexed_file(&db, &source, "old-report.txt", "txt");
+
+        let executed = execute_moves_with_persistence(
+            &db,
+            ExecuteMovesRequest {
+                operations: vec![OperationPreviewRequest {
+                    id: "op-rename".to_string(),
+                    file_id: source.to_string_lossy().into_owned(),
+                    operation_type: "rename".to_string(),
+                    source_path: source.to_string_lossy().into_owned(),
+                    target_path: renamed.to_string_lossy().into_owned(),
+                    old_name: "old-report.txt".to_string(),
+                    new_name: "new-report.txt".to_string(),
+                    is_executable: Some(true),
+                }],
+            },
+        )
+        .expect("execute moves with persistence");
+        assert_eq!(
+            db.search_files("new-report", Some(10))
+                .expect("search after execute")
+                .len(),
+            1
+        );
+
+        restore_moves_with_persistence(
+            &db,
+            RestoreMovesRequest {
+                logs: executed.logs.clone(),
+            },
+        )
+        .expect("restore moves with persistence");
+        let old_results = db
+            .search_files("old-report", Some(10))
+            .expect("search old after restore");
+        let new_results = db
+            .search_files("new-report", Some(10))
+            .expect("search new after restore");
+
+        assert_eq!(old_results.len(), 1);
+        assert_eq!(old_results[0].path, normalize_path(&source));
+        assert_eq!(old_results[0].name, "old-report.txt");
+        assert!(new_results
+            .iter()
+            .all(|result| result.path != normalize_path(&renamed)));
+    }
+
+    #[test]
+    fn restore_moves_does_not_fail_when_file_record_missing() {
+        let db = Database::open(test_db_path()).expect("open database");
+        let root = test_dir();
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&target_dir).expect("target dir");
+        let source = source_dir.join("missing-record.txt");
+        let target = target_dir.join("missing-record.txt");
+        fs::write(&source, "hello").expect("write source");
+
+        let executed = execute_moves_with_persistence(
+            &db,
+            ExecuteMovesRequest {
+                operations: vec![OperationPreviewRequest {
+                    id: "op-missing-record".to_string(),
+                    file_id: source.to_string_lossy().into_owned(),
+                    operation_type: "move".to_string(),
+                    source_path: source.to_string_lossy().into_owned(),
+                    target_path: target.to_string_lossy().into_owned(),
+                    old_name: "missing-record.txt".to_string(),
+                    new_name: "missing-record.txt".to_string(),
+                    is_executable: Some(true),
+                }],
+            },
+        )
+        .expect("execute moves with persistence");
+
+        let restored = restore_moves_with_persistence(
+            &db,
+            RestoreMovesRequest {
+                logs: executed.logs.clone(),
+            },
+        )
+        .expect("restore moves with persistence");
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+
+        assert_eq!(restored.restored, 1);
+        assert_eq!(restored.logs[0].restore_status, "restored");
+        assert_eq!(logs[0].restore_status, "restored");
+        assert_eq!(page.total, 0);
+        assert!(source.exists());
     }
 
     #[cfg(windows)]

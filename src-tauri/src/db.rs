@@ -350,6 +350,38 @@ impl Database {
         target_path: &str,
         new_name: &str,
     ) -> Result<bool, DbError> {
+        self.update_file_record_after_path_change(
+            path_lookup_candidates(file_id, source_path),
+            target_path,
+            new_name,
+        )
+    }
+
+    pub fn update_file_after_successful_restore(
+        &self,
+        log: &OperationLogDto,
+    ) -> Result<bool, DbError> {
+        if log.restore_status != "restored" {
+            return Ok(false);
+        }
+
+        self.update_file_record_after_path_change(
+            path_lookup_candidates_for_values(&[
+                log.path_after.as_str(),
+                log.target_path.as_str(),
+                log.source_path.as_str(),
+            ]),
+            &log.path_before,
+            &log.name_before,
+        )
+    }
+
+    fn update_file_record_after_path_change(
+        &self,
+        lookup_candidates: Vec<String>,
+        target_path: &str,
+        new_name: &str,
+    ) -> Result<bool, DbError> {
         let target = PathBuf::from(target_path);
         let metadata = fs::metadata(&target)?;
         let normalized_target = normalize_path_for_db(&target);
@@ -366,7 +398,6 @@ impl Database {
             .and_then(system_time_to_unix_seconds)
             .unwrap_or_else(current_unix_seconds);
         let is_dir = metadata.is_dir();
-        let lookup_candidates = path_lookup_candidates(file_id, source_path);
         let target_candidates = path_lookup_candidates(target_path, &normalized_target);
 
         let mut conn = self.conn()?;
@@ -1236,8 +1267,12 @@ fn bool_to_i64(value: bool) -> i64 {
 }
 
 fn path_lookup_candidates(first: &str, second: &str) -> Vec<String> {
+    path_lookup_candidates_for_values(&[first, second])
+}
+
+fn path_lookup_candidates_for_values(values: &[&str]) -> Vec<String> {
     let mut candidates = Vec::new();
-    for value in [first, second] {
+    for value in values {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             continue;
