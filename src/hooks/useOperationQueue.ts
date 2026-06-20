@@ -4,7 +4,7 @@ import type { FileRecord, OperationLog, OperationPreview, Rule } from "../types/
 import type { Translator } from "../types/ui";
 import { applyPreviewNameOverride, createOperationPreviews, readableError } from "../utils/viewHelpers";
 
-const MAX_LOGS = 500;
+export const MAX_LOGS = 500;
 
 export interface OperationQueueOptions {
   files: FileRecord[];
@@ -33,6 +33,26 @@ export function useOperationQueue({
     [previewNameOverrides, previews]
   );
   const previewActionCount = displayPreviews.filter((preview) => preview.status === "pending").length;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPersistedOperationLogs() {
+      try {
+        const persistedLogs = await tauriApi.getOperationLogs(MAX_LOGS);
+        if (cancelled) return;
+        setOperationLogs((current) => mergeOperationLogs(persistedLogs, current));
+      } catch (error) {
+        if (!cancelled) onError(readableError(error));
+      }
+    }
+
+    void loadPersistedOperationLogs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [onError]);
 
   useEffect(() => {
     setSelectedOperationIds(
@@ -97,4 +117,15 @@ export function useOperationQueue({
     restoreOperationLogs,
     onRenamePreview
   };
+}
+
+export function mergeOperationLogs(persisted: OperationLog[], current: OperationLog[]): OperationLog[] {
+  const seen = new Set<string>();
+  const merged: OperationLog[] = [];
+  for (const log of [...current, ...persisted]) {
+    if (seen.has(log.id)) continue;
+    seen.add(log.id);
+    merged.push(log);
+  }
+  return merged.slice(0, MAX_LOGS);
 }

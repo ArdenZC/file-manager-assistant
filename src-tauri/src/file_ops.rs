@@ -1,3 +1,4 @@
+use crate::db::Database;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -7,7 +8,7 @@ use std::{
     process::Command as ProcessCommand,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::command;
+use tauri::{command, State};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -128,7 +129,17 @@ pub fn move_file(source_path: String, target_path: String) -> Result<FileOperati
 }
 
 #[command]
-pub fn execute_moves(request: ExecuteMovesRequest) -> Result<ExecuteMovesResult, String> {
+pub fn execute_moves(
+    db: State<'_, Database>,
+    request: ExecuteMovesRequest,
+) -> Result<ExecuteMovesResult, String> {
+    let result = execute_moves_core(request);
+    db.save_operation_logs(&result.batch_id, &result.logs)
+        .map_err(|error| format!("operation completed but failed to persist logs: {error}"))?;
+    Ok(result)
+}
+
+pub fn execute_moves_core(request: ExecuteMovesRequest) -> ExecuteMovesResult {
     let batch_id = format!("batch-{}", current_timestamp_ms());
     let created_at = current_timestamp_ms().to_string();
     let logs = request
@@ -140,11 +151,11 @@ pub fn execute_moves(request: ExecuteMovesRequest) -> Result<ExecuteMovesResult,
         })
         .collect::<Vec<_>>();
 
-    Ok(ExecuteMovesResult {
+    ExecuteMovesResult {
         logs,
         updated_files: Vec::new(),
         batch_id,
-    })
+    }
 }
 
 #[command]
@@ -615,7 +626,7 @@ mod tests {
     };
 
     #[test]
-    fn execute_moves_moves_files_and_returns_success_log() {
+    fn execute_moves_core_moves_files_and_returns_success_log() {
         let root = test_dir();
         let source_dir = root.join("source");
         let target_dir = root.join("target");
@@ -626,7 +637,7 @@ mod tests {
         let target = target_dir.join("sample.txt");
         fs::write(&source, "hello").expect("write source");
 
-        let result = execute_moves(ExecuteMovesRequest {
+        let result = execute_moves_core(ExecuteMovesRequest {
             operations: vec![OperationPreviewRequest {
                 id: "op-1".to_string(),
                 file_id: "file-1".to_string(),
@@ -637,8 +648,7 @@ mod tests {
                 new_name: "sample.txt".to_string(),
                 is_executable: Some(true),
             }],
-        })
-        .expect("execute moves");
+        });
 
         assert!(!source.exists());
         assert!(target.exists());
@@ -660,7 +670,7 @@ mod tests {
         let target = target_dir.join("sample.txt");
         fs::write(&source, "hello").expect("write source");
 
-        let executed = execute_moves(ExecuteMovesRequest {
+        let executed = execute_moves_core(ExecuteMovesRequest {
             operations: vec![OperationPreviewRequest {
                 id: "op-1".to_string(),
                 file_id: "file-1".to_string(),
@@ -671,8 +681,7 @@ mod tests {
                 new_name: "sample.txt".to_string(),
                 is_executable: Some(true),
             }],
-        })
-        .expect("execute moves");
+        });
 
         let restored = restore_moves(RestoreMovesRequest {
             logs: executed.logs.clone(),
@@ -701,7 +710,7 @@ mod tests {
         let target = target_dir.join("sample.txt");
         fs::write(&source, "hello").expect("write source");
 
-        let executed = execute_moves(ExecuteMovesRequest {
+        let executed = execute_moves_core(ExecuteMovesRequest {
             operations: vec![OperationPreviewRequest {
                 id: "op-1".to_string(),
                 file_id: "file-1".to_string(),
@@ -712,8 +721,7 @@ mod tests {
                 new_name: "sample.txt".to_string(),
                 is_executable: Some(true),
             }],
-        })
-        .expect("execute moves");
+        });
 
         fs::write(&source, "new file").expect("write conflicting source");
         let restored = restore_moves(RestoreMovesRequest {
@@ -745,7 +753,7 @@ mod tests {
         let renamed = root.join("new-name.txt");
         fs::write(&source, "hello").expect("write source");
 
-        let executed = execute_moves(ExecuteMovesRequest {
+        let executed = execute_moves_core(ExecuteMovesRequest {
             operations: vec![OperationPreviewRequest {
                 id: "op-1".to_string(),
                 file_id: "file-1".to_string(),
@@ -756,8 +764,7 @@ mod tests {
                 new_name: "new-name.txt".to_string(),
                 is_executable: Some(true),
             }],
-        })
-        .expect("execute rename");
+        });
 
         assert!(!source.exists());
         assert!(renamed.exists());
@@ -789,9 +796,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn build_reveal_command_selects_file_with_macos_open() {
-        let command =
-            build_reveal_command(Path::new("/Users/example/Documents/sample.txt"))
-                .expect("reveal command");
+        let command = build_reveal_command(Path::new("/Users/example/Documents/sample.txt"))
+            .expect("reveal command");
 
         assert_eq!(command.program, "open");
         assert_eq!(
@@ -803,9 +809,8 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn build_reveal_command_opens_parent_directory_on_linux() {
-        let command =
-            build_reveal_command(Path::new("/home/example/Documents/sample.txt"))
-                .expect("reveal command");
+        let command = build_reveal_command(Path::new("/home/example/Documents/sample.txt"))
+            .expect("reveal command");
 
         assert_eq!(command.program, "xdg-open");
         assert_eq!(command.args, vec!["/home/example/Documents"]);

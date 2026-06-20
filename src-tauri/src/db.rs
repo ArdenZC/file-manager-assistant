@@ -1,3 +1,4 @@
+use crate::file_ops::OperationLogDto;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -61,7 +62,7 @@ struct IndexedFileRow {
 const CLASSIFY_BATCH_SIZE: usize = 500;
 
 /// 当前期望的 schema 版本号，每次需要改动 schema 时 +1
-const CURRENT_SCHEMA_VERSION: i32 = 3;
+const CURRENT_SCHEMA_VERSION: i32 = 4;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -643,6 +644,147 @@ impl Database {
         })
     }
 
+    pub fn get_operation_logs(&self, limit: Option<u32>) -> Result<Vec<OperationLogDto>, DbError> {
+        let limit = i64::from(limit.unwrap_or(500).clamp(1, 1000));
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                id,
+                batch_id,
+                operation_type,
+                source_path,
+                target_path,
+                old_name,
+                new_name,
+                status,
+                error_message,
+                created_at,
+                can_undo,
+                path_before,
+                path_after,
+                name_before,
+                name_after,
+                can_restore,
+                restored_at,
+                restore_status,
+                restore_error
+            FROM operation_logs
+            ORDER BY created_at DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit], operation_log_from_row)?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn save_operation_logs(
+        &self,
+        batch_id: &str,
+        logs: &[OperationLogDto],
+    ) -> Result<(), DbError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let created_at = logs
+            .first()
+            .map(|log| parse_operation_timestamp(&log.created_at))
+            .unwrap_or_else(current_timestamp_ms);
+        let batch_status = if logs.iter().any(|log| log.status == "failed") {
+            "partial_failed"
+        } else {
+            "success"
+        };
+
+        tx.execute(
+            r#"
+            INSERT INTO operation_batches (id, created_at, status)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(id) DO UPDATE SET
+                created_at = excluded.created_at,
+                status = excluded.status
+            "#,
+            params![batch_id, created_at, batch_status],
+        )?;
+
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                INSERT INTO operation_logs (
+                    id,
+                    batch_id,
+                    operation_type,
+                    source_path,
+                    target_path,
+                    old_name,
+                    new_name,
+                    status,
+                    error_message,
+                    created_at,
+                    can_undo,
+                    path_before,
+                    path_after,
+                    name_before,
+                    name_after,
+                    can_restore,
+                    restored_at,
+                    restore_status,
+                    restore_error
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                ON CONFLICT(id) DO UPDATE SET
+                    batch_id = excluded.batch_id,
+                    operation_type = excluded.operation_type,
+                    source_path = excluded.source_path,
+                    target_path = excluded.target_path,
+                    old_name = excluded.old_name,
+                    new_name = excluded.new_name,
+                    status = excluded.status,
+                    error_message = excluded.error_message,
+                    created_at = excluded.created_at,
+                    can_undo = excluded.can_undo,
+                    path_before = excluded.path_before,
+                    path_after = excluded.path_after,
+                    name_before = excluded.name_before,
+                    name_after = excluded.name_after,
+                    can_restore = excluded.can_restore,
+                    restored_at = excluded.restored_at,
+                    restore_status = excluded.restore_status,
+                    restore_error = excluded.restore_error
+                "#,
+            )?;
+
+            for log in logs {
+                stmt.execute(params![
+                    log.id,
+                    log.batch_id,
+                    log.operation_type,
+                    log.source_path,
+                    log.target_path,
+                    log.old_name,
+                    log.new_name,
+                    log.status,
+                    log.error_message,
+                    parse_operation_timestamp(&log.created_at),
+                    bool_to_i64(log.can_undo),
+                    log.path_before,
+                    log.path_after,
+                    log.name_before,
+                    log.name_after,
+                    bool_to_i64(log.can_restore),
+                    log.restored_at
+                        .as_deref()
+                        .and_then(parse_optional_operation_timestamp),
+                    log.restore_status,
+                    log.restore_error
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     fn conn(&self) -> Result<PooledConnection<SqliteConnectionManager>, DbError> {
         self.pool.get().map_err(DbError::from)
     }
@@ -686,6 +828,14 @@ pub fn get_paged_files(
 #[tauri::command]
 pub fn get_stats_summary(db: State<'_, Database>) -> Result<StatsSummary, String> {
     db.get_stats_summary().map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_operation_logs(
+    db: State<'_, Database>,
+    limit: Option<u32>,
+) -> Result<Vec<OperationLogDto>, String> {
+    db.get_operation_logs(limit).map_err(command_error)
 }
 
 #[tauri::command]
@@ -826,6 +976,42 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
         )?;
         set_schema_version(conn, 3)?;
     }
+    if version < 4 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS operation_batches (
+                id TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS operation_logs (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                target_path TEXT NOT NULL,
+                old_name TEXT NOT NULL,
+                new_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                created_at INTEGER NOT NULL,
+                can_undo INTEGER NOT NULL DEFAULT 0,
+                path_before TEXT NOT NULL,
+                path_after TEXT NOT NULL,
+                name_before TEXT NOT NULL,
+                name_after TEXT NOT NULL,
+                can_restore INTEGER NOT NULL DEFAULT 0,
+                restored_at INTEGER,
+                restore_status TEXT NOT NULL DEFAULT 'not_restored',
+                restore_error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_operation_logs_batch_id ON operation_logs(batch_id);
+            CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_operation_logs_restore_status ON operation_logs(restore_status);
+            "#,
+        )?;
+        set_schema_version(conn, 4)?;
+    }
     Ok(())
 }
 
@@ -937,6 +1123,16 @@ fn bool_to_i64(value: bool) -> i64 {
     }
 }
 
+fn parse_operation_timestamp(value: &str) -> i64 {
+    value
+        .parse::<i64>()
+        .unwrap_or_else(|_| current_timestamp_ms())
+}
+
+fn parse_optional_operation_timestamp(value: &str) -> Option<i64> {
+    value.parse::<i64>().ok()
+}
+
 fn command_error(error: DbError) -> String {
     error.to_string()
 }
@@ -964,6 +1160,32 @@ fn indexed_file_from_row(row: &Row<'_>) -> rusqlite::Result<IndexedFileRow> {
         classification_reason: row.get(18)?,
         matched_rules: row.get(19)?,
         requires_confirmation: row.get::<_, i64>(20)? != 0,
+    })
+}
+
+fn operation_log_from_row(row: &Row<'_>) -> rusqlite::Result<OperationLogDto> {
+    let created_at: i64 = row.get(9)?;
+    let restored_at: Option<i64> = row.get(16)?;
+    Ok(OperationLogDto {
+        id: row.get(0)?,
+        batch_id: row.get(1)?,
+        operation_type: row.get(2)?,
+        source_path: row.get(3)?,
+        target_path: row.get(4)?,
+        old_name: row.get(5)?,
+        new_name: row.get(6)?,
+        status: row.get(7)?,
+        error_message: row.get(8)?,
+        created_at: created_at.to_string(),
+        can_undo: row.get::<_, i64>(10)? != 0,
+        path_before: row.get(11)?,
+        path_after: row.get(12)?,
+        name_before: row.get(13)?,
+        name_after: row.get(14)?,
+        can_restore: row.get::<_, i64>(15)? != 0,
+        restored_at: restored_at.map(|value| value.to_string()),
+        restore_status: row.get(17)?,
+        restore_error: row.get(18)?,
     })
 }
 
@@ -1913,6 +2135,13 @@ fn current_timestamp_iso() -> String {
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
+fn current_timestamp_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2146,6 +2375,100 @@ mod tests {
     }
 
     #[test]
+    fn operation_log_tables_exist_after_migration() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let conn = Connection::open(db.path()).expect("open migrated database");
+
+        let table_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM sqlite_schema
+                WHERE type = 'table'
+                  AND name IN ('operation_batches', 'operation_logs')
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .expect("count operation tables");
+
+        assert_eq!(table_count, 2);
+    }
+
+    #[test]
+    fn get_operation_logs_returns_empty_array_for_empty_table() {
+        let db = Database::open(test_db_path()).expect("open test database");
+
+        let logs = db.get_operation_logs(Some(500)).expect("operation logs");
+
+        assert!(logs.is_empty());
+    }
+
+    #[test]
+    fn save_operation_logs_persists_success_log() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let log = operation_log("log-success", "batch-success", "success");
+
+        db.save_operation_logs("batch-success", &[log.clone()])
+            .expect("save operation logs");
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].id, log.id);
+        assert_eq!(logs[0].batch_id, "batch-success");
+        assert_eq!(logs[0].status, "success");
+        assert!(logs[0].can_restore);
+        assert_eq!(operation_batch_status(&db, "batch-success"), "success");
+    }
+
+    #[test]
+    fn save_operation_logs_persists_failed_log() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let mut log = operation_log("log-failed", "batch-failed", "failed");
+        log.error_message = Some("Source file does not exist.".to_string());
+        log.can_undo = false;
+        log.can_restore = false;
+
+        db.save_operation_logs("batch-failed", &[log.clone()])
+            .expect("save operation logs");
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, "failed");
+        assert_eq!(
+            logs[0].error_message.as_deref(),
+            Some("Source file does not exist.")
+        );
+        assert!(!logs[0].can_restore);
+        assert_eq!(
+            operation_batch_status(&db, "batch-failed"),
+            "partial_failed"
+        );
+    }
+
+    #[test]
+    fn save_operation_logs_persists_skipped_log() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let mut log = operation_log("log-skipped", "batch-skipped", "skipped");
+        log.error_message = Some("Operation is not executable.".to_string());
+        log.can_undo = false;
+        log.can_restore = false;
+
+        db.save_operation_logs("batch-skipped", &[log.clone()])
+            .expect("save operation logs");
+        let logs = db.get_operation_logs(Some(10)).expect("operation logs");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, "skipped");
+        assert_eq!(
+            logs[0].error_message.as_deref(),
+            Some("Operation is not executable.")
+        );
+        assert!(!logs[0].can_restore);
+        assert_eq!(operation_batch_status(&db, "batch-skipped"), "success");
+    }
+
+    #[test]
     fn build_fts_query_quotes_terms_without_breaking_chinese_or_punctuation() {
         let query = build_fts_query("项目\"报告 final-v1.pdf").expect("query");
 
@@ -2172,6 +2495,41 @@ mod tests {
             state_code: 0,
         })
         .expect("insert file");
+    }
+
+    fn operation_log(id: &str, batch_id: &str, status: &str) -> OperationLogDto {
+        let success = status == "success";
+        OperationLogDto {
+            id: id.to_string(),
+            batch_id: batch_id.to_string(),
+            operation_type: "move".to_string(),
+            source_path: "/tmp/source.txt".to_string(),
+            target_path: "/tmp/target.txt".to_string(),
+            old_name: "source.txt".to_string(),
+            new_name: "target.txt".to_string(),
+            status: status.to_string(),
+            error_message: None,
+            created_at: "1900000000123".to_string(),
+            can_undo: success,
+            path_before: "/tmp/source.txt".to_string(),
+            path_after: "/tmp/target.txt".to_string(),
+            name_before: "source.txt".to_string(),
+            name_after: "target.txt".to_string(),
+            can_restore: success,
+            restored_at: None,
+            restore_status: "not_restored".to_string(),
+            restore_error: None,
+        }
+    }
+
+    fn operation_batch_status(db: &Database, batch_id: &str) -> String {
+        let conn = Connection::open(db.path()).expect("open migrated database");
+        conn.query_row(
+            "SELECT status FROM operation_batches WHERE id = ?1",
+            params![batch_id],
+            |row| row.get(0),
+        )
+        .expect("operation batch status")
     }
 
     fn test_db_path() -> PathBuf {

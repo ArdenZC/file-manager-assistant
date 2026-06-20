@@ -37,6 +37,7 @@ fn main() {
             zen_canvas_tauri::db::search_files,
             zen_canvas_tauri::db::get_paged_files,
             zen_canvas_tauri::db::get_stats_summary,
+            zen_canvas_tauri::db::get_operation_logs,
             zen_canvas_tauri::db::execute_rules_on_inbox,
             zen_canvas_tauri::scanner::scan_directory,
             zen_canvas_tauri::scanner::cancel_scan,
