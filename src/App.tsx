@@ -233,6 +233,7 @@ export function App() {
       toggleRuleEnabled={toggleRuleEnabled}
       deleteRule={deleteRule}
       toast={toast}
+      onError={showError}
       closeBehavior={closeBehavior}
       setCloseBehavior={setCloseBehavior}
       folderNamingLanguage={appSettings.folderNamingLanguage}

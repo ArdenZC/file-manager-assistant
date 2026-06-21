@@ -1,7 +1,7 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion, type Variants } from "motion/react";
-import { Check, ChevronRight, File, Folder, FolderSearch, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, File, Folder, FolderOpen, FolderSearch, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { tauriApi, type OperationProgressPayload, type RuleExecutionSummary, type ScanProgressPayload } from "../api/tauriApi";
 import { nextDefaultScanFolders } from "../hooks/useAppSettings";
 import type { Language } from "../i18n";
@@ -30,6 +30,7 @@ import {
   groupOperationPreviews,
   localId,
   nowIso,
+  readableError,
   splitDisplaySize
 } from "../utils/viewHelpers";
 import { shouldVirtualizeList } from "../utils/virtualization";
@@ -79,6 +80,27 @@ const RULE_OPERATOR_OPTIONS = [
 const RULE_PURPOSE_OPTIONS = ["Temporary", "Career", "Finance", "Study", "Project", "Personal", "Media", "Unknown"] as const satisfies readonly Purpose[];
 const RULE_LIFECYCLE_OPTIONS = ["Inbox", "Active", "Reference", "Archive", "Disposable", "Sensitive"] as const satisfies readonly Lifecycle[];
 const RULE_LOGIC_OPTIONS = ["AND", "OR"] as const satisfies readonly RuleOperator[];
+
+export interface RevealFileFromCardOptions {
+  path: string;
+  onError: (message: string) => void;
+  stopPropagation: () => void;
+  reveal?: (path: string) => Promise<void>;
+}
+
+export async function revealFileFromCard({
+  path,
+  onError,
+  stopPropagation,
+  reveal = tauriApi.revealInFolder
+}: RevealFileFromCardOptions): Promise<void> {
+  stopPropagation();
+  try {
+    await reveal(path);
+  } catch (error) {
+    onError(readableError(error));
+  }
+}
 
 const listMotion: Variants = {
   hidden: {},
@@ -295,12 +317,14 @@ export function HubView({
   files,
   rules,
   onRunDispatch,
+  onError,
   setView,
   t
 }: {
   files: FileRecord[];
   rules: Rule[];
   onRunDispatch: () => Promise<RuleExecutionSummary | void>;
+  onError: (message: string) => void;
   setView: (view: View) => void;
   t: Translator;
 }) {
@@ -341,7 +365,7 @@ export function HubView({
           <h2 className="text-lg font-semibold">{t("inboxStack")}</h2>
           <span className={mutedText}>{pendingFiles.length} {t("items")}</span>
         </div>
-        <VirtualFileCardList files={pendingFiles} t={t} />
+        <VirtualFileCardList files={pendingFiles} onError={onError} t={t} />
         <motion.button
           whileTap={{ scale: 0.985 }}
           className={cn(glassButtonPrimary, "w-full")}
@@ -379,7 +403,15 @@ export function HubView({
   );
 }
 
-function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator }) {
+function VirtualFileCardList({
+  files,
+  onError,
+  t
+}: {
+  files: FileRecord[];
+  onError: (message: string) => void;
+  t: Translator;
+}) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const shouldVirtualize = shouldVirtualizeList(files.length);
   const rowVirtualizer = useVirtualizer({
@@ -404,7 +436,7 @@ function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator 
     return (
       <motion.div className="grid min-h-0 flex-1 gap-3 overflow-auto pr-1" variants={listMotion} initial="hidden" animate="show">
         {files.map((file, index) => (
-          <FileCard key={file.id} file={file} index={index} t={t} compact />
+          <FileCard key={file.id} file={file} index={index} onError={onError} t={t} compact />
         ))}
       </motion.div>
     );
@@ -424,7 +456,7 @@ function VirtualFileCardList({ files, t }: { files: FileRecord[]; t: Translator 
                 transform: `translateY(${virtualRow.start}px)`
               }}
             >
-              <FileCard file={file} index={virtualRow.index} t={t} compact disableAnimation />
+              <FileCard file={file} index={virtualRow.index} onError={onError} t={t} compact disableAnimation />
             </div>
           );
         })}
@@ -532,6 +564,7 @@ export function VaultView({
   setSearchQuery,
   setSelectedFileId,
   onRefreshStats,
+  onError,
   t
 }: {
   page: FileQueryResult;
@@ -541,6 +574,7 @@ export function VaultView({
   setSearchQuery: (searchQuery: string) => void;
   setSelectedFileId: (id: string) => void;
   onRefreshStats: () => Promise<void>;
+  onError: (message: string) => void;
   t: Translator;
 }) {
   const [isLoading, setIsLoading] = useState(false);
@@ -636,8 +670,10 @@ export function VaultView({
       {error && <div className={cn(statusToast, "mt-0")}>{error}</div>}
       <VirtualAssetGrid
         files={page.files}
+        onError={onError}
         selectedFileId={selectedFile?.id}
         setSelectedFileId={setSelectedFileId}
+        t={t}
       />
       <div ref={sentinelRef} className="h-1" />
       {hasMore && (
@@ -652,12 +688,16 @@ export function VaultView({
 
 function VirtualAssetGrid({
   files,
+  onError,
   selectedFileId,
-  setSelectedFileId
+  setSelectedFileId,
+  t
 }: {
   files: FileRecord[];
+  onError: (message: string) => void;
   selectedFileId?: string;
   setSelectedFileId: (id: string) => void;
+  t: Translator;
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [columns, setColumns] = useState(4);
@@ -690,7 +730,9 @@ function VirtualAssetGrid({
             file={file}
             isSelected={selectedFileId === file.id}
             key={file.id}
+            onError={onError}
             setSelectedFileId={setSelectedFileId}
+            t={t}
           />
         ))}
       </motion.section>
@@ -718,7 +760,9 @@ function VirtualAssetGrid({
                   file={file}
                   isSelected={selectedFileId === file.id}
                   key={file.id}
+                  onError={onError}
                   setSelectedFileId={setSelectedFileId}
+                  t={t}
                 />
               ))}
             </div>
@@ -732,23 +776,56 @@ function VirtualAssetGrid({
 const AssetCard = memo(function AssetCard({
   file,
   isSelected,
-  setSelectedFileId
+  onError,
+  setSelectedFileId,
+  t
 }: {
   file: FileRecord;
   isSelected: boolean;
+  onError: (message: string) => void;
   setSelectedFileId: (id: string) => void;
+  t: Translator;
 }) {
+  function selectFile() {
+    setSelectedFileId(file.id);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectFile();
+  }
+
   return (
-    <motion.button
+    <motion.div
       className={cn(
         panelSurface,
-        "grid min-h-52 gap-3 p-4 text-left transition hover:-translate-y-0.5 hover:bg-white/40 dark:hover:bg-white/10",
+        "group relative grid min-h-52 cursor-pointer gap-3 p-4 text-left transition hover:-translate-y-0.5 hover:bg-white/40 dark:hover:bg-white/10",
         isSelected && "ring-2 ring-blue-400/60"
       )}
       layout
       variants={itemMotion}
-      onClick={() => setSelectedFileId(file.id)}
+      role="button"
+      tabIndex={0}
+      onClick={selectFile}
+      onKeyDown={handleKeyDown}
     >
+      <button
+        type="button"
+        className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-lg border border-[var(--line)] bg-white/70 text-[var(--muted)] opacity-0 shadow-sm transition hover:border-blue-400/60 hover:bg-blue-500/10 hover:text-blue-600 focus:opacity-100 group-hover:opacity-100 dark:bg-slate-900/70 dark:hover:text-blue-300"
+        aria-label={t("revealPhysical")}
+        title={t("revealPhysical")}
+        onClick={(event) => {
+          void revealFileFromCard({
+            path: file.path,
+            onError,
+            stopPropagation: () => event.stopPropagation()
+          });
+        }}
+      >
+        <FolderOpen size={15} />
+      </button>
       <div className={cn("grid h-12 w-12 place-items-center rounded-2xl border", toneClasses(file.risk_level === "Sensitive" ? "red" : file.lifecycle === "Archive" ? "purple" : "blue"))}>
         <File size={24} />
       </div>
@@ -758,7 +835,7 @@ const AssetCard = memo(function AssetCard({
         <strong>{formatBytes(file.size)}</strong>
       </div>
       <small className="truncate text-xs text-[var(--quiet)]">{file.directory || file.path}</small>
-    </motion.button>
+    </motion.div>
   );
 });
 
@@ -1704,21 +1781,23 @@ export function SettingsView({
 function FileCard({
   file,
   index,
+  onError,
   t,
   compact = false,
   disableAnimation = false
 }: {
   file: FileRecord;
   index: number;
+  onError: (message: string) => void;
   t: Translator;
   compact?: boolean;
   disableAnimation?: boolean;
 }) {
   return (
-    <motion.button
+    <motion.div
       className={cn(
         rowSurface,
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 hover:bg-white/50 dark:hover:bg-white/10",
+        "group grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 hover:bg-white/50 dark:hover:bg-white/10",
         compact ? "p-3" : "p-4"
       )}
       layout={!disableAnimation}
@@ -1732,8 +1811,23 @@ function FileCard({
         <strong className="block truncate text-sm">{file.name}</strong>
         <small className="block text-xs text-[var(--muted)]">{file.purpose} / {formatBytes(file.size)}</small>
       </span>
+      <button
+        type="button"
+        className="grid h-8 w-8 place-items-center rounded-lg border border-[var(--line)] bg-white/60 text-[var(--muted)] opacity-0 shadow-sm transition hover:border-blue-400/60 hover:bg-blue-500/10 hover:text-blue-600 focus:opacity-100 group-hover:opacity-100 dark:bg-slate-900/60 dark:hover:text-blue-300"
+        aria-label={t("revealPhysical")}
+        title={t("revealPhysical")}
+        onClick={(event) => {
+          void revealFileFromCard({
+            path: file.path,
+            onError,
+            stopPropagation: () => event.stopPropagation()
+          });
+        }}
+      >
+        <FolderOpen size={15} />
+      </button>
       <em className={cn("rounded-full border px-2 py-1 text-xs not-italic", toneClasses(file.risk_level === "Sensitive" ? "red" : "green"))}>{file.risk_level === "Sensitive" ? t("sensitiveLabel") : t("normal")}</em>
-    </motion.button>
+    </motion.div>
   );
 }
 

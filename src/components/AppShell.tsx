@@ -100,6 +100,7 @@ interface AppShellProps {
   cancelOperations: () => Promise<void>;
   onRenamePreview: (id: string, name: string) => void;
   toast: { message: string; type: "success" | "error" | "info" } | null;
+  onError: (message: string) => void;
   commandInputRef: RefObject<HTMLInputElement | null>;
   isCommandOpen: boolean;
   setIsCommandOpen: Dispatch<SetStateAction<boolean>>;
@@ -305,7 +306,7 @@ function AppViewContent(props: AppShellProps) {
       />
     );
   }
-  if (props.view === "organize") return <HubView files={props.files} rules={props.rules} onRunDispatch={props.runDispatch} setView={props.setView} t={props.t} />;
+  if (props.view === "organize") return <HubView files={props.files} rules={props.rules} onRunDispatch={props.runDispatch} onError={props.onError} setView={props.setView} t={props.t} />;
   if (props.view === "library") {
     return (
       <VaultView
@@ -316,6 +317,7 @@ function AppViewContent(props: AppShellProps) {
         setSearchQuery={props.setSearchQuery}
         setSelectedFileId={props.setSelectedFileId}
         onRefreshStats={props.loadStats}
+        onError={props.onError}
         t={props.t}
       />
     );
