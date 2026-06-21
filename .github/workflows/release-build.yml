@@ -20,12 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows x64 ia32 arm64
+          - name: Windows NSIS
             os: windows-latest
-            dist_script: dist:win
-          - name: macOS x64 arm64
+          - name: macOS DMG
             os: macos-latest
-            dist_script: dist:mac
 
     steps:
       - name: Checkout
@@ -53,20 +51,15 @@ jobs:
         run: npm run security:audit
 
       - name: Package installers
-        run: npm run ${{ matrix.dist_script }}
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run build
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
           name: Zen-Canvas-${{ runner.os }}
           path: |
-            dist-packages/*.exe
-            dist-packages/*.dmg
-            dist-packages/*.zip
-            dist-packages/*.blockmap
-            dist-packages/latest*.yml
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
   release:
@@ -87,15 +80,12 @@ jobs:
           body: |
             Zen Canvas unsigned public build.
 
-            - Windows: NSIS installer and portable zip, x64 / ia32 / arm64
-            - macOS: dmg and zip, x64 / arm64
+            - Windows: Tauri NSIS installer
+            - macOS: Tauri DMG installer
             - Branded Zen Canvas installer assets, app icon, and bilingual release/legal copy
             - Local-first SQLite FTS search, preview execution, and configurable 15/30/60/90-day restore records
-            - Security posture: Electron sandbox, isolated preload IPC, guarded move/rename operations, and npm high audit clean
+            - Security posture: Tauri desktop runtime, strict content security policy, guarded move/rename operations, and npm high audit clean
           files: |
             release-artifacts/**/*.exe
             release-artifacts/**/*.dmg
-            release-artifacts/**/*.zip
-            release-artifacts/**/*.blockmap
-            release-artifacts/**/latest*.yml
           fail_on_unmatched_files: true
