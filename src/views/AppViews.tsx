@@ -15,7 +15,12 @@ import type {
   OperationLog,
   OperationPreview,
   RestoreRetentionDays,
-  Rule
+  Lifecycle,
+  Purpose,
+  Rule,
+  RuleCondition,
+  RuleConditionGroup,
+  RuleOperator
 } from "../types/domain";
 import type { ThemeMode, Translator, View } from "../types/ui";
 import { formatBytes, percent } from "../utils/format";
@@ -50,6 +55,30 @@ const BUCKET_FILE_ROW_HEIGHT = 48;
 const ASSET_GRID_ROW_HEIGHT = 234;
 const PREVIEW_ROW_HEIGHT = 156;
 const RULE_ROW_HEIGHT = 68;
+
+const RULE_FIELD_OPTIONS = [
+  "name",
+  "extension",
+  "file_type",
+  "path",
+  "directory",
+  "size",
+  "modified_at",
+  "risk_level"
+] as const satisfies readonly RuleCondition["field"][];
+const RULE_OPERATOR_OPTIONS = [
+  "contains",
+  "equals",
+  "startsWith",
+  "endsWith",
+  "greaterThan",
+  "lessThan",
+  "olderThanDays",
+  "newerThanDays"
+] as const satisfies readonly RuleCondition["operator"][];
+const RULE_PURPOSE_OPTIONS = ["Temporary", "Career", "Finance", "Study", "Project", "Personal", "Media", "Unknown"] as const satisfies readonly Purpose[];
+const RULE_LIFECYCLE_OPTIONS = ["Inbox", "Active", "Reference", "Archive", "Disposable", "Sensitive"] as const satisfies readonly Lifecycle[];
+const RULE_LOGIC_OPTIONS = ["AND", "OR"] as const satisfies readonly RuleOperator[];
 
 const listMotion: Variants = {
   hidden: {},
@@ -88,6 +117,60 @@ function segmentButton(active: boolean): string {
     "rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] transition hover:bg-white/50 hover:text-[var(--ink)] dark:hover:bg-white/10",
     active && "bg-blue-500 text-white shadow-sm hover:bg-blue-500 hover:text-white"
   );
+}
+
+export interface RuleBuilderDraft {
+  id?: string;
+  name: string;
+  rootOperator: RuleOperator;
+  groups: RuleConditionGroup[];
+  purpose: Purpose;
+  lifecycle: Lifecycle;
+  weight: number;
+  now: string;
+}
+
+export function buildRuleFromBuilderDraft(draft: RuleBuilderDraft): Rule {
+  return {
+    id: draft.id ?? localId("rule"),
+    name: draft.name,
+    source: "user",
+    enabled: true,
+    priority: 75,
+    weight: draft.weight,
+    root_operator: draft.rootOperator,
+    groups: draft.groups.map((group) => ({
+      ...group,
+      conditions: group.conditions.map((condition) => ({ ...condition }))
+    })),
+    action: {
+      purpose: draft.purpose,
+      lifecycle: draft.lifecycle,
+      suggested_action: "Move",
+      target_template: "00_Inbox/Screenshots",
+      context: "Screenshots"
+    },
+    created_at: draft.now,
+    updated_at: draft.now
+  };
+}
+
+function createRuleCondition(overrides: Partial<RuleCondition> = {}): RuleCondition {
+  return {
+    id: localId("cond"),
+    field: "name",
+    operator: "contains",
+    value: "screenshot",
+    ...overrides
+  };
+}
+
+function createRuleGroup(conditionOverrides: Partial<RuleCondition> = {}): RuleConditionGroup {
+  return {
+    id: localId("group"),
+    operator: "AND",
+    conditions: [createRuleCondition(conditionOverrides)]
+  };
 }
 
 function toggleSwitch(on: boolean): string {
@@ -923,43 +1006,74 @@ export function RulesView({
   t: Translator;
 }) {
   const [name, setName] = useState("Screenshots to Inbox");
-  const [field, setField] = useState("name");
-  const [operator, setOperator] = useState("contains");
-  const [value, setValue] = useState("screenshot");
-  const [purpose, setPurpose] = useState("Temporary");
-  const [lifecycle, setLifecycle] = useState("Inbox");
+  const [rootOperator, setRootOperator] = useState<RuleOperator>("AND");
+  const [groups, setGroups] = useState<RuleConditionGroup[]>(() => [createRuleGroup()]);
+  const [purpose, setPurpose] = useState<Purpose>("Temporary");
+  const [lifecycle, setLifecycle] = useState<Lifecycle>("Inbox");
   const [weight, setWeight] = useState(76);
+
+  function updateGroupOperator(groupId: string, nextOperator: RuleOperator) {
+    setGroups((current) =>
+      current.map((group) => (group.id === groupId ? { ...group, operator: nextOperator } : group))
+    );
+  }
+
+  function updateCondition(groupId: string, conditionId: string, patch: Partial<RuleCondition>) {
+    setGroups((current) =>
+      current.map((group) =>
+        group.id === groupId
+          ? {
+              ...group,
+              conditions: group.conditions.map((condition) =>
+                condition.id === conditionId ? { ...condition, ...patch } : condition
+              )
+            }
+          : group
+      )
+    );
+  }
+
+  function addCondition(groupId: string) {
+    setGroups((current) =>
+      current.map((group) =>
+        group.id === groupId
+          ? { ...group, conditions: [...group.conditions, createRuleCondition({ value: "" })] }
+          : group
+      )
+    );
+  }
+
+  function removeCondition(groupId: string, conditionId: string) {
+    setGroups((current) =>
+      current.map((group) =>
+        group.id === groupId && group.conditions.length > 1
+          ? { ...group, conditions: group.conditions.filter((condition) => condition.id !== conditionId) }
+          : group
+      )
+    );
+  }
+
+  function addGroup() {
+    setGroups((current) => [...current, createRuleGroup({ value: "" })]);
+  }
+
+  function removeGroup(groupId: string) {
+    setGroups((current) =>
+      current.length > 1 ? current.filter((group) => group.id !== groupId) : current
+    );
+  }
 
   async function submit() {
     const now = nowIso();
-    await onSave({
-      id: localId("rule"),
+    await onSave(buildRuleFromBuilderDraft({
       name,
-      source: "user",
-      enabled: true,
-      priority: 75,
+      rootOperator,
+      groups,
+      purpose,
+      lifecycle,
       weight,
-      root_operator: "AND",
-      groups: [{
-        id: localId("group"),
-        operator: "AND",
-        conditions: [{
-          id: localId("cond"),
-          field: field as Rule["groups"][number]["conditions"][number]["field"],
-          operator: operator as Rule["groups"][number]["conditions"][number]["operator"],
-          value
-        }]
-      }],
-      action: {
-        purpose: purpose as Rule["action"]["purpose"],
-        lifecycle: lifecycle as Rule["action"]["lifecycle"],
-        suggested_action: "Move",
-        target_template: "00_Inbox/Screenshots",
-        context: "Screenshots"
-      },
-      created_at: now,
-      updated_at: now
-    });
+      now
+    }));
   }
 
   return (
@@ -968,19 +1082,104 @@ export function RulesView({
         <SectionTitle title={t("ruleBuilder")} body={t("customDesc")} />
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--line)] bg-white/25 p-3 text-sm dark:bg-white/5">
           <span>{t("whenFile")}</span>
-          <strong className="rounded-full bg-blue-500/10 px-2 py-1 text-blue-600 dark:text-blue-300">{field}</strong>
-          <strong className="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-300">{operator}</strong>
-          <input className={cn(inputSurface, "min-h-8 w-40")} value={value} onChange={(event) => setValue(event.target.value)} />
+          <strong className="rounded-full bg-blue-500/10 px-2 py-1 text-blue-600 dark:text-blue-300">{groups.length} {t("ruleGroups")}</strong>
+          <strong className="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-300">{rootOperator}</strong>
           <span>{t("thenSendTo")}</span>
           <strong className="rounded-full bg-violet-500/10 px-2 py-1 text-violet-600 dark:text-violet-300">{purpose}</strong>
         </div>
         <div className={formGrid}>
           <label>{t("ruleName")}<input className={inputSurface} value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label>{t("field")}<select className={selectSurface} value={field} onChange={(event) => setField(event.target.value)}>{["name", "extension", "file_type", "path", "directory", "size", "modified_at", "risk_level"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("operator")}<select className={selectSurface} value={operator} onChange={(event) => setOperator(event.target.value)}>{["contains", "equals", "startsWith", "endsWith", "greaterThan", "lessThan", "olderThanDays", "newerThanDays"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("purpose")}<select className={selectSurface} value={purpose} onChange={(event) => setPurpose(event.target.value)}>{["Temporary", "Career", "Finance", "Study", "Project", "Personal", "Media", "Unknown"].map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>{t("lifecycle")}<select className={selectSurface} value={lifecycle} onChange={(event) => setLifecycle(event.target.value)}>{["Inbox", "Active", "Reference", "Archive", "Disposable", "Sensitive"].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <div className="grid gap-1.5 text-sm font-medium text-[var(--muted)]">
+            <span>{t("rootOperator")}</span>
+            <div className={segmented} role="group" aria-label={t("rootOperator")}>
+              {RULE_LOGIC_OPTIONS.map((item) => (
+                <button key={item} type="button" className={segmentButton(rootOperator === item)} onClick={() => setRootOperator(item)}>
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label>{t("purpose")}<select className={selectSurface} value={purpose} onChange={(event) => setPurpose(event.target.value as Purpose)}>{RULE_PURPOSE_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+          <label>{t("lifecycle")}<select className={selectSurface} value={lifecycle} onChange={(event) => setLifecycle(event.target.value as Lifecycle)}>{RULE_LIFECYCLE_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
           <label>{t("weight")}<input className={inputSurface} type="number" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
+        </div>
+        <div className="mt-4 grid gap-3">
+          {groups.map((group, groupIndex) => (
+            <div key={group.id} className="rounded-2xl border border-[var(--line)] bg-white/25 p-3 shadow-sm dark:bg-white/5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <strong className="block text-sm">{t("ruleGroup")} {groupIndex + 1}</strong>
+                  <span className={quietText}>{group.conditions.length} {t("conditions")}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={quietText}>{t("groupOperator")}</span>
+                  <div className={segmented} role="group" aria-label={`${t("ruleGroup")} ${groupIndex + 1} ${t("groupOperator")}`}>
+                    {RULE_LOGIC_OPTIONS.map((item) => (
+                      <button key={item} type="button" className={segmentButton(group.operator === item)} onClick={() => updateGroupOperator(group.id, item)}>
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="grid h-8 w-8 place-items-center rounded-lg border border-[var(--line)] text-[var(--muted)] transition hover:border-red-400/60 hover:bg-red-500/10 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent disabled:hover:text-[var(--muted)] dark:hover:text-red-300"
+                    disabled={groups.length <= 1}
+                    aria-label={t("deleteGroup")}
+                    title={t("deleteGroup")}
+                    onClick={() => removeGroup(group.id)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                {group.conditions.map((condition) => (
+                  <div key={condition.id} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] items-center gap-2">
+                    <select
+                      className={selectSurface}
+                      value={condition.field}
+                      aria-label={t("field")}
+                      onChange={(event) => updateCondition(group.id, condition.id, { field: event.target.value as RuleCondition["field"] })}
+                    >
+                      {RULE_FIELD_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                    <select
+                      className={selectSurface}
+                      value={condition.operator}
+                      aria-label={t("operator")}
+                      onChange={(event) => updateCondition(group.id, condition.id, { operator: event.target.value as RuleCondition["operator"] })}
+                    >
+                      {RULE_OPERATOR_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                    <input
+                      className={inputSurface}
+                      value={String(condition.value)}
+                      aria-label={t("value")}
+                      onChange={(event) => updateCondition(group.id, condition.id, { value: event.target.value })}
+                    />
+                    <button
+                      type="button"
+                      className="grid h-10 w-10 place-items-center rounded-lg border border-[var(--line)] text-[var(--muted)] transition hover:border-red-400/60 hover:bg-red-500/10 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent disabled:hover:text-[var(--muted)] dark:hover:text-red-300"
+                      disabled={group.conditions.length <= 1}
+                      aria-label={t("deleteCondition")}
+                      title={t("deleteCondition")}
+                      onClick={() => removeCondition(group.id, condition.id)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className={cn(glassButton, "mt-3")} onClick={() => addCondition(group.id)}>
+                <Plus size={15} />
+                {t("addCondition")}
+              </button>
+            </div>
+          ))}
+          <button type="button" className={glassButton} onClick={addGroup}>
+            <Plus size={15} />
+            {t("addGroup")}
+          </button>
         </div>
         <button className={cn(glassButtonPrimary, "mt-4")} onClick={submit}>
           <Plus size={17} />
