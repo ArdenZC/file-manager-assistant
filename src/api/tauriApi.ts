@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AppSettings,
   DashboardStats,
   ExecuteOperationRequest,
   ExecuteOperationResult,
@@ -131,6 +132,14 @@ export const tauriApi = {
 
   deleteUserRule(id: string): Promise<boolean> {
     return invokeCommand<boolean>("delete_user_rule", { id });
+  },
+
+  getSettings(): Promise<AppSettings> {
+    return invokeCommand<AppSettings>("get_settings");
+  },
+
+  saveSettings(settings: AppSettings): Promise<AppSettings> {
+    return invokeCommand<AppSettings>("save_settings", { settings });
   },
 
   initDatabase(): Promise<void> {

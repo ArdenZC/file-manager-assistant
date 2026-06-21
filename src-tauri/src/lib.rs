@@ -2,6 +2,7 @@ pub mod db;
 pub mod file_ops;
 pub mod path_filter;
 pub mod scanner;
+pub mod settings;
 pub mod watcher;
 
 use db::Database;
@@ -23,6 +24,7 @@ pub use scanner::{
     cancel_scan, scan_directory, ScanBatchPayload, ScanCancellationToken, ScanProgressPayload,
     ScanSummary, ScannedEntry,
 };
+pub use settings::{get_app_settings, get_settings, save_app_settings, save_settings, AppSettings};
 pub use watcher::{setup_file_watcher, FileWatchEvent, WatcherErrorEvent, WatcherReadyEvent};
 
 pub fn database_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {

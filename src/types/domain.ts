@@ -52,6 +52,14 @@ export type CloseBehavior = "ask" | "minimize" | "quit";
 export type DefaultScanFolder = "Desktop" | "Downloads" | "Documents";
 export type RestoreRetentionDays = 15 | 30 | 60 | 90;
 
+export interface AppSettings {
+  closeBehavior: CloseBehavior;
+  folderNamingLanguage: FolderNamingLanguage;
+  defaultScanFolders: DefaultScanFolder[];
+  restoreRetentionDays: RestoreRetentionDays;
+  launchAtLogin: boolean;
+}
+
 export interface FileRecord {
   id: string;
   name: string;

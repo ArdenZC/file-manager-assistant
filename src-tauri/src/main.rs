@@ -4,7 +4,7 @@ use std::{
 };
 
 use tauri::Manager;
-use zen_canvas_tauri::{open_database, ScanCancellationToken};
+use zen_canvas_tauri::{open_database, settings, ScanCancellationToken};
 
 fn main() {
     tauri::Builder::default()
@@ -12,13 +12,20 @@ fn main() {
         .setup(|app| {
             let db = open_database(&app.handle())
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
-            app.manage(db);
+            app.manage(db.clone());
+            let app_settings = settings::get_app_settings(&db)
+                .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            db.prune_operation_logs(app_settings.restore_retention_days)
+                .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             app.manage(ScanCancellationToken(Arc::new(AtomicBool::new(false))));
-            // 构建默认监听路径：用户主目录下的 Desktop / Downloads / Documents
+            // 构建默认监听路径：用户主目录下设置启用的个人文件夹
             let home = dirs::home_dir();
-            let watch_paths: Vec<std::path::PathBuf> = ["Desktop", "Downloads", "Documents"]
-                .iter()
-                .filter_map(|name| home.as_ref().map(|h| h.join(name)))
+            let watch_paths: Vec<std::path::PathBuf> =
+                zen_canvas_tauri::watcher::watch_paths_from_default_scan_folders(
+                    home.as_deref(),
+                    &app_settings.default_scan_folders,
+                )
+                .into_iter()
                 .filter(|p| p.exists())
                 .collect();
             if !watch_paths.is_empty() {
@@ -44,6 +51,8 @@ fn main() {
             zen_canvas_tauri::db::delete_user_rule,
             zen_canvas_tauri::db::execute_rules_on_inbox,
             zen_canvas_tauri::db::execute_rules_for_paths,
+            zen_canvas_tauri::settings::get_settings,
+            zen_canvas_tauri::settings::save_settings,
             zen_canvas_tauri::scanner::scan_directory,
             zen_canvas_tauri::scanner::cancel_scan,
             zen_canvas_tauri::file_ops::move_file,

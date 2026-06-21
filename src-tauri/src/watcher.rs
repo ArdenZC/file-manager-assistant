@@ -16,6 +16,7 @@ use thiserror::Error;
 const FILE_EVENT_NAME: &str = "fs-event";
 const WATCHER_READY_EVENT_NAME: &str = "fs-watcher-ready";
 const WATCHER_ERROR_EVENT_NAME: &str = "fs-watcher-error";
+const DEFAULT_SCAN_FOLDER_NAMES: [&str; 3] = ["Desktop", "Downloads", "Documents"];
 
 #[derive(Debug, Error)]
 enum WatcherError {
@@ -59,6 +60,20 @@ pub fn setup_file_watcher<R: Runtime>(
     paths: Vec<PathBuf>,
 ) -> Result<(), String> {
     setup_file_watcher_inner(app, paths).map_err(|error| error.to_string())
+}
+
+pub fn watch_paths_from_default_scan_folders(
+    home: Option<&Path>,
+    folders: &[String],
+) -> Vec<PathBuf> {
+    match home {
+        Some(home) => folders
+            .iter()
+            .filter(|name| DEFAULT_SCAN_FOLDER_NAMES.contains(&name.as_str()))
+            .map(|name| home.join(name))
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 fn setup_file_watcher_inner<R: Runtime>(
@@ -137,6 +152,40 @@ fn event_to_payload(event: Event) -> Option<FileWatchEvent> {
         paths,
         timestamp_ms: current_timestamp_ms(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watch_paths_follow_default_scan_folder_settings() {
+        let home = PathBuf::from("/Users/zen");
+        let folders = vec!["Downloads".to_string(), "Documents".to_string()];
+
+        let paths = watch_paths_from_default_scan_folders(Some(home.as_path()), &folders);
+
+        assert_eq!(paths, vec![home.join("Downloads"), home.join("Documents")]);
+    }
+
+    #[test]
+    fn watch_paths_are_empty_without_home_directory() {
+        let folders = vec!["Desktop".to_string()];
+
+        let paths = watch_paths_from_default_scan_folders(None, &folders);
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn watch_paths_ignore_unsupported_folder_names() {
+        let home = PathBuf::from("/Users/zen");
+        let folders = vec!["Downloads".to_string(), "..".to_string()];
+
+        let paths = watch_paths_from_default_scan_folders(Some(home.as_path()), &folders);
+
+        assert_eq!(paths, vec![home.join("Downloads")]);
+    }
 }
 
 fn event_type(kind: &EventKind) -> &'static str {

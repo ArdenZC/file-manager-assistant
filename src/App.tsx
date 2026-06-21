@@ -6,6 +6,7 @@ import { useAppChrome } from "./hooks/useAppChrome";
 import { useDebounce } from "./hooks/useDebounce";
 import { useFileLibrary } from "./hooks/useFileLibrary";
 import { useFsWatcher } from "./hooks/useFsWatcher";
+import { useAppSettings } from "./hooks/useAppSettings";
 import { useOperationQueue } from "./hooks/useOperationQueue";
 import { useRulePersistence } from "./hooks/useRulePersistence";
 import { useScanManager } from "./hooks/useScanManager";
@@ -37,6 +38,14 @@ export function App() {
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const showSuccess = useCallback((message: string) => setToast({ message, type: "success" }), []);
   const showError = useCallback((message: string) => setToast({ message, type: "error" }), []);
+  const formatSettingsLoadError = useCallback(
+    (error: unknown) => `${t("settingsLoadFailed")}：${readableError(error)}`,
+    [t]
+  );
+  const formatSettingsSaveError = useCallback(
+    (error: unknown) => `${t("settingsSaveFailed")}：${readableError(error)}`,
+    [t]
+  );
   const { stats, libraryPage, setLibraryPage, files, selectedFile, setSelectedFileId, loadStats, refresh } =
     useFileLibrary({
       debouncedSearchQuery,
@@ -76,6 +85,12 @@ export function App() {
     rules,
     hydrateUserRulesFromSQLite,
     onError: showError
+  });
+  useAppSettings({
+    isDatabaseReady,
+    onError: showError,
+    formatLoadError: formatSettingsLoadError,
+    formatSaveError: formatSettingsSaveError
   });
   useFsWatcher({ onRefreshData: refresh, onError: showError, rules });
 

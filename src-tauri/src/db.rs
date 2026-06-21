@@ -71,7 +71,7 @@ const OPTIMIZE_AFTER_UPSERT_THRESHOLD: usize = 500;
 pub const SEARCH_INDEX_OPTIMIZED_EVENT: &str = "search-index-optimized";
 
 /// 当前期望的 schema 版本号，每次需要改动 schema 时 +1
-const CURRENT_SCHEMA_VERSION: i32 = 7;
+const CURRENT_SCHEMA_VERSION: i32 = 8;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1200,7 +1200,34 @@ impl Database {
         Ok(())
     }
 
-    fn conn(&self) -> Result<PooledConnection<SqliteConnectionManager>, DbError> {
+    pub fn prune_operation_logs(&self, retention_days: i64) -> Result<(), DbError> {
+        let retention_days = retention_days.max(0);
+        let retention_ms = retention_days.saturating_mul(24 * 60 * 60 * 1000);
+        let prune_before = current_timestamp_ms().saturating_sub(retention_ms);
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+
+        tx.execute(
+            "DELETE FROM operation_logs WHERE created_at < ?1",
+            params![prune_before],
+        )?;
+        tx.execute(
+            r#"
+            DELETE FROM operation_batches
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM operation_logs
+                WHERE operation_logs.batch_id = operation_batches.id
+            )
+            "#,
+            [],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn conn(&self) -> Result<PooledConnection<SqliteConnectionManager>, DbError> {
         self.pool.get().map_err(DbError::from)
     }
 }
@@ -1526,6 +1553,27 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
             "#,
         )?;
         set_schema_version(conn, 7)?;
+    }
+    if version < 8 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            "#,
+        )?;
+        conn.execute(
+            r#"
+            INSERT OR IGNORE INTO app_settings (key, value)
+            VALUES (?1, ?2)
+            "#,
+            params![
+                crate::settings::APP_SETTINGS_KEY,
+                crate::settings::default_settings_json()?
+            ],
+        )?;
+        set_schema_version(conn, 8)?;
     }
     Ok(())
 }
