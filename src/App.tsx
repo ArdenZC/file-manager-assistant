@@ -86,7 +86,7 @@ export function App() {
     hydrateUserRulesFromSQLite,
     onError: showError
   });
-  useAppSettings({
+  const { settings: appSettings, updateSettings } = useAppSettings({
     isDatabaseReady,
     onError: showError,
     formatLoadError: formatSettingsLoadError,
@@ -95,15 +95,23 @@ export function App() {
   useFsWatcher({ onRefreshData: refresh, onError: showError, rules });
 
   const appChrome = useAppChrome({ theme, setTheme, setLanguage });
+  const setCloseBehavior = useCallback(
+    async (next: typeof appSettings.closeBehavior) => {
+      await updateSettings({ closeBehavior: next });
+    },
+    [updateSettings]
+  );
   const {
     closeBehavior,
-    setCloseBehavior,
     isCloseChoiceOpen,
     onCancelCloseChoice,
     handleWindowAction,
     requestClose,
     resolveCloseChoice
-  } = useWindowBehavior({ platform: appChrome.platform });
+  } = useWindowBehavior({
+    closeBehavior: appSettings.closeBehavior,
+    setCloseBehavior
+  });
   const scanManager = useScanManager({
     t,
     loadStats,

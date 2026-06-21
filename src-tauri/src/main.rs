@@ -53,6 +53,7 @@ fn main() {
             zen_canvas_tauri::db::execute_rules_for_paths,
             zen_canvas_tauri::settings::get_settings,
             zen_canvas_tauri::settings::save_settings,
+            zen_canvas_tauri::app_control::quit_app,
             zen_canvas_tauri::scanner::scan_directory,
             zen_canvas_tauri::scanner::cancel_scan,
             zen_canvas_tauri::file_ops::move_file,

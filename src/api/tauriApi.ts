@@ -142,6 +142,10 @@ export const tauriApi = {
     return invokeCommand<AppSettings>("save_settings", { settings });
   },
 
+  quitApp(): Promise<void> {
+    return invokeCommand<void>("quit_app");
+  },
+
   initDatabase(): Promise<void> {
     return invokeCommand<void>("init_db");
   },

@@ -1,3 +1,4 @@
+pub mod app_control;
 pub mod db;
 pub mod file_ops;
 pub mod path_filter;
@@ -9,6 +10,7 @@ use db::Database;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
+pub use app_control::quit_app;
 pub use db::{
     delete_user_rule, execute_rules_for_paths, execute_rules_on_inbox, get_operation_logs,
     get_paged_files, get_stats_summary, get_user_rules, init_db, insert_file, save_user_rule,

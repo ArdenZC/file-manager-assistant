@@ -1,18 +1,39 @@
 import { useCallback, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { tauriApi } from "../api/tauriApi";
 import type { CloseBehavior } from "../types/ui";
 
 interface UseWindowBehaviorOptions {
-  platform: NodeJS.Platform | "browser";
+  closeBehavior: CloseBehavior;
+  setCloseBehavior: (next: CloseBehavior) => Promise<void>;
 }
 
-function readStoredBehavior(): CloseBehavior {
-  const saved = window.localStorage.getItem("zc-close-behavior");
-  return saved === "minimize" || saved === "quit" || saved === "ask" ? saved : "ask";
+export async function hideToBackground() {
+  await getCurrentWindow().hide();
 }
 
-export function useWindowBehavior({ platform }: UseWindowBehaviorOptions) {
-  const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(readStoredBehavior);
+export async function quitApp() {
+  await tauriApi.quitApp();
+}
+
+export function performCloseBehavior(
+  behavior: CloseBehavior,
+  setCloseChoiceOpen: (open: boolean) => void
+) {
+  if (behavior === "ask") {
+    setCloseChoiceOpen(true);
+    return;
+  }
+
+  setCloseChoiceOpen(false);
+  if (behavior === "minimize") void hideToBackground();
+  if (behavior === "quit") void quitApp();
+}
+
+export function useWindowBehavior({
+  closeBehavior,
+  setCloseBehavior: persistCloseBehavior
+}: UseWindowBehaviorOptions) {
   const [isCloseChoiceOpen, setIsCloseChoiceOpen] = useState(false);
   const closeBehaviorRef = useRef(closeBehavior);
 
@@ -21,36 +42,16 @@ export function useWindowBehavior({ platform }: UseWindowBehaviorOptions) {
     closeBehaviorRef.current = closeBehavior;
   }
 
-  const setCloseBehavior = useCallback(async (next: CloseBehavior) => {
-    window.localStorage.setItem("zc-close-behavior", next);
-    setCloseBehaviorState(next);
-  }, []);
-
-  const closeForPlatform = useCallback(async () => {
-    const win = getCurrentWindow();
-    if (platform === "darwin") {
-      await win.hide();
-      return;
-    }
-    await win.close();
-  }, [platform]);
+  const setCloseBehavior = useCallback(
+    async (next: CloseBehavior) => {
+      await persistCloseBehavior(next);
+    },
+    [persistCloseBehavior]
+  );
 
   const requestClose = useCallback(() => {
-    if (platform === "darwin" || platform === "win32") {
-      setIsCloseChoiceOpen(false);
-      void closeForPlatform();
-      return;
-    }
-
-    const behavior = closeBehaviorRef.current;
-    if (behavior === "ask") {
-      setIsCloseChoiceOpen(true);
-      return;
-    }
-    if (behavior === "quit") void closeForPlatform();
-    if (behavior === "minimize") void getCurrentWindow().minimize();
-    setIsCloseChoiceOpen(false);
-  }, [closeForPlatform]);
+    performCloseBehavior(closeBehaviorRef.current, setIsCloseChoiceOpen);
+  }, []);
 
   const handleWindowAction = useCallback(
     async (action: "minimize" | "maximize" | "close") => {
@@ -72,13 +73,13 @@ export function useWindowBehavior({ platform }: UseWindowBehaviorOptions) {
   );
 
   const resolveCloseChoice = useCallback(
-      async (action: "minimize" | "quit", remember: boolean) => {
-        if (remember) await setCloseBehavior(action);
-        setIsCloseChoiceOpen(false);
-        if (action === "quit") void closeForPlatform();
-        if (action === "minimize") void getCurrentWindow().minimize();
-      },
-      [closeForPlatform, setCloseBehavior]
+    async (action: "minimize" | "quit", remember: boolean) => {
+      if (remember) await setCloseBehavior(action);
+      setIsCloseChoiceOpen(false);
+      if (action === "quit") void quitApp();
+      if (action === "minimize") void hideToBackground();
+    },
+    [setCloseBehavior]
   );
 
   return {
