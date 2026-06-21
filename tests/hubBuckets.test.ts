@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FileRecord } from "../src/types/domain";
-import { groupFilesByHubBucket } from "../src/views/AppViews";
+import { groupFilesByHubBucket } from "../src/views/hub/HubView";
 
 describe("HubView file buckets", () => {
   it("groups classified files into the same bucket rules used by HubView", () => {
