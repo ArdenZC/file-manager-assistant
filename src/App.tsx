@@ -61,6 +61,10 @@ export function App() {
     (error: unknown) => `${t("settingsSaveFailed")}：${readableError(error)}`,
     [t]
   );
+  const reportWindowActionError = useCallback(
+    (error: unknown) => showError(`${t("windowActionFailed")}：${readableError(error)}`),
+    [showError, t]
+  );
   const fileLibrary = useFileLibrary({
     debouncedSearchQuery,
     onError: showError
@@ -167,7 +171,8 @@ export function App() {
   );
   const windowBehavior = useWindowBehavior({
     closeBehavior: appSettings.closeBehavior,
-    setCloseBehavior
+    setCloseBehavior,
+    onError: reportWindowActionError
   });
   const scanManager = useScanManager({
     t,

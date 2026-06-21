@@ -27,6 +27,7 @@ import { hideToBackground } from "../hooks/useWindowBehavior";
 import type { Translator, View } from "../types/ui";
 import { formatDate } from "../utils/format";
 import { cn, glassButton, glassButtonPrimary, statusToast, toastTone } from "../utils/tw";
+import { readableError } from "../utils/viewHelpers";
 import {
   HubView,
   RestoreView,
@@ -134,14 +135,14 @@ function SearchWindow() {
 }
 
 function CommandLauncher({ standalone = false }: { standalone?: boolean }) {
-  const { commandInputRef, setView, setIsCommandOpen, platform, t } = useChromeContext();
+  const { commandInputRef, setView, setIsCommandOpen, platform, onError, t } = useChromeContext();
   const { setSelectedFileId } = useFileLibraryContext();
 
   function closeCommand() {
     setIsCommandOpen(false);
     if (standalone) {
-      void hideToBackground().catch((error) => {
-        console.error("Failed to hide search window.", error);
+      void hideToBackground((error) => {
+        onError(`${t("windowActionFailed")}：${readableError(error)}`);
       });
     }
   }
