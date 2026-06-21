@@ -1,13 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
-import { Check, ChevronRight, File, Folder, FolderOpen, FolderSearch, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
-import { tauriApi, type OperationProgressPayload, type RuleExecutionSummary, type ScanProgressPayload } from "../api/tauriApi";
+import { Check, ChevronRight, File, Folder, FolderOpen, Play, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { tauriApi, type OperationProgressPayload, type RuleExecutionSummary } from "../api/tauriApi";
 import { nextDefaultScanFolders } from "../hooks/useAppSettings";
 import type { Language } from "../i18n";
 import type {
   CloseBehavior,
-  DashboardStats,
   DefaultScanFolder,
   FileQueryResult,
   FileRecord,
@@ -29,8 +28,7 @@ import {
   defaultPlatformAccelerator,
   groupOperationPreviews,
   localId,
-  nowIso,
-  splitDisplaySize
+  nowIso
 } from "../utils/viewHelpers";
 import { shouldVirtualizeList } from "../utils/virtualization";
 import { revealFileFromCard } from "./shared/cardActions";
@@ -176,109 +174,7 @@ function createRuleGroup(conditionOverrides: Partial<RuleCondition> = {}): RuleC
   };
 }
 
-export function ScannerView({
-  stats,
-  files,
-  selectedFolders,
-  isScanning,
-  scanProgress,
-  chooseFolders,
-  scanCommon,
-  cancelScan,
-  t
-}: {
-  stats: DashboardStats;
-  files: FileRecord[];
-  selectedFolders: string[];
-  isScanning: boolean;
-  scanProgress: ScanProgressPayload | null;
-  chooseFolders: () => Promise<void>;
-  scanCommon: () => Promise<void>;
-  cancelScan: () => Promise<void>;
-  t: Translator;
-}) {
-  const scopedTotalSize = files.reduce((sum, file) => sum + file.size, 0);
-  const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, scopedTotalSize / stats.diskTotalSize) : 0;
-  const clutterItems = files.filter((file) => file.requires_confirmation || file.is_duplicate || file.size > 1024 * 1024 * 1024).length;
-  const clutterRatio = files.length ? Math.min(1, clutterItems / files.length) : 0;
-  const scopeLabel = selectedFolders[0] ?? t("userSpaceHint");
-  const analysedSize = splitDisplaySize(formatBytes(scopedTotalSize));
-
-  return (
-    <div className={cn(pageSurface, "grid place-items-center gap-5 py-6 text-center")}>
-      <section className="relative">
-        <div
-          className={cn(
-            "grid h-72 w-72 place-items-center rounded-full p-4 shadow-[var(--shadow-strong)]",
-            isScanning && "animate-pulse"
-          )}
-          style={{
-            background: `conic-gradient(#3b82f6 0 ${Math.round(diskUsageRatio * 100)}%, rgba(59,130,246,0.10) ${Math.round(diskUsageRatio * 100)}% 100%)`
-          } as CSSProperties}
-        >
-          <div className="grid h-full w-full place-items-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-8 backdrop-blur-3xl">
-            {isScanning ? (
-              <div className="text-sm font-medium text-blue-600 dark:text-blue-300">
-                <span>{t("scanning")}...</span>
-              </div>
-            ) : (
-              <>
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--quiet)]">{t("totalAnalysed")}</span>
-                <strong className="mt-2 block text-5xl font-semibold">
-                  {analysedSize.value}
-                  <span className="ml-1 text-base text-[var(--muted)]">{analysedSize.unit}</span>
-                </strong>
-                <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-white/40 px-3 py-1 text-sm text-[var(--muted)] dark:bg-white/5">
-                  <i className="h-2 w-2 rounded-full bg-emerald-500" />
-                  <span>{percent(diskUsageRatio)}</span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="grid w-full max-w-lg grid-cols-2 gap-3">
-        <div className={cn(panelSurface, "p-4 text-left")}>
-          <span className={quietText}>{t("files")}</span>
-          <strong className="mt-1 block text-2xl text-blue-600 dark:text-blue-300">{stats.totalFiles.toLocaleString()}</strong>
-        </div>
-        <div className={cn(panelSurface, "p-4 text-left")}>
-          <span className={quietText}>{t("clutterRatio")}</span>
-          <strong className="mt-1 block text-2xl text-red-600 dark:text-red-300">{percent(clutterRatio)}</strong>
-        </div>
-      </section>
-
-      <section className="flex items-center justify-center gap-3">
-        <button className={glassButtonPrimary} onClick={scanCommon} disabled={isScanning}>
-          <RefreshCw size={18} />
-          <span>{isScanning ? t("scanning") : t("scanCommon")}</span>
-        </button>
-        {isScanning ? (
-          <button className={glassButton} onClick={cancelScan}>
-            <X size={18} />
-            <span>{t("cancelScan")}</span>
-          </button>
-        ) : (
-          <button className={glassButton} onClick={chooseFolders}>
-            <FolderSearch size={18} />
-            <span>{t("chooseFolders")}</span>
-          </button>
-        )}
-      </section>
-
-      <p className="max-w-xl text-sm font-medium text-[var(--ink)]">{scopeLabel}</p>
-      <p className="max-w-2xl text-sm text-[var(--muted)]">
-        {isScanning && scanProgress
-          ? t("scanProgressLine")
-              .replace("{files}", scanProgress.files.toLocaleString())
-              .replace("{skipped}", scanProgress.skipped.toLocaleString())
-              .replace("{path}", compactPath(scanProgress.root))
-          : t("diskUsageInScope").replace("{size}", formatBytes(scopedTotalSize)).replace("{disk}", formatBytes(stats.diskTotalSize))}
-      </p>
-    </div>
-  );
-}
+export { ScannerView } from "./scanner/ScannerView";
 
 export function HubView({
   files,
