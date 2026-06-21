@@ -1,5 +1,6 @@
+import { createElement } from "react";
 import type { Variants } from "motion/react";
-import { cn, glassPanel, toneClasses } from "../../utils/tw";
+import { cn, glassPanel, sectionTitle, toneClasses } from "../../utils/tw";
 
 export const listMotion: Variants = {
   hidden: {},
@@ -54,3 +55,16 @@ export function sourceBadge(source: string): string {
   );
 }
 
+
+export function SectionTitle({ title, body }: { title: string; body: string }) {
+  return createElement(
+    "div",
+    { className: sectionTitle },
+    createElement(
+      "div",
+      null,
+      createElement("h2", null, title),
+      createElement("p", null, body)
+    )
+  );
+}

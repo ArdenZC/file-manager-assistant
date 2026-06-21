@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RuleConditionGroup } from "../src/types/domain";
-import { buildRuleFromBuilderDraft } from "../src/views/AppViews";
+import { buildRuleFromBuilderDraft } from "../src/views/rules/ruleBuilder";
 
 describe("rule builder", () => {
   it("serializes root operator and nested condition groups without flattening", () => {
