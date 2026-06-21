@@ -14,7 +14,7 @@ use zen_canvas_tauri::{
 };
 
 #[test]
-fn schema_version_9_adds_content_hash_and_dedupe_index() {
+fn schema_version_10_retains_content_hash_and_dedupe_index() {
     let db = Database::open(test_db_path()).expect("open test database");
     let conn = Connection::open(db.path()).expect("open migrated database");
 
@@ -38,7 +38,7 @@ fn schema_version_9_adds_content_hash_and_dedupe_index() {
         )
         .expect("dedupe index");
 
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     assert_eq!(content_hash_type, "TEXT");
     assert_eq!(content_hash_notnull, 1);
     assert!(index_sql.contains("files(size, content_hash)"));

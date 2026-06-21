@@ -549,11 +549,7 @@ function BucketFileButton({
 }
 
 function isRuleClassified(file: FileRecord): boolean {
-  return (
-    file.matched_rules.length > 0 ||
-    file.classification_reason !== "Indexed by Zen Canvas Tauri backend." ||
-    file.purpose !== "Unknown"
-  );
+  return file.classification_status === "classified";
 }
 
 export function VaultView({

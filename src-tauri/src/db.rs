@@ -56,6 +56,7 @@ struct IndexedFileRow {
     suggested_name: String,
     confidence: f64,
     classification_reason: String,
+    classification_status: String,
     matched_rules: String,
     requires_confirmation: bool,
     content_hash: String,
@@ -73,7 +74,9 @@ const OPTIMIZE_AFTER_UPSERT_THRESHOLD: usize = 500;
 pub const SEARCH_INDEX_OPTIMIZED_EVENT: &str = "search-index-optimized";
 
 /// 当前期望的 schema 版本号，每次需要改动 schema 时 +1
-const CURRENT_SCHEMA_VERSION: i32 = 9;
+const CURRENT_SCHEMA_VERSION: i32 = 10;
+const CLASSIFICATION_STATUS_UNCLASSIFIED: &str = "unclassified";
+const CLASSIFICATION_STATUS_CLASSIFIED: &str = "classified";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,6 +133,7 @@ pub struct FileRecordDto {
     pub suggested_name: String,
     pub confidence: f64,
     pub classification_reason: String,
+    pub classification_status: String,
     pub matched_rules: Vec<String>,
     pub requires_confirmation: bool,
     pub last_opened_at: Option<String>,
@@ -286,9 +290,9 @@ impl Database {
                 r#"
             INSERT INTO files (
                 id, path, name, extension, size, mtime, ctime, is_dir, state_code,
-                file_type, suggested_name, is_stale, last_seen_at
+                file_type, suggested_name, classification_status, is_stale, last_seen_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13)
             ON CONFLICT(id) DO UPDATE SET
                 path = excluded.path,
                 name = excluded.name,
@@ -330,6 +334,7 @@ impl Database {
                     file.state_code,
                     file_type,
                     file.name,
+                    CLASSIFICATION_STATUS_UNCLASSIFIED,
                     last_seen_at
                 ])?;
             }
@@ -539,7 +544,7 @@ impl Database {
                 SELECT f.id, f.path, f.name, f.extension, f.size, f.mtime, f.ctime, f.is_dir, f.state_code,
                        f.file_type, f.purpose, f.lifecycle, f.context, f.risk_level, f.suggested_action,
                        f.suggested_target_path, f.suggested_name, f.confidence, f.classification_reason,
-                       f.matched_rules, f.requires_confirmation, f.content_hash,
+                       f.classification_status, f.matched_rules, f.requires_confirmation, f.content_hash,
                        (dg.content_hash IS NOT NULL) AS is_duplicate,
                        f.is_stale, f.last_seen_at, f.last_classified_at, f.classified_rule_version,
                        f.last_classified_mtime, f.last_classified_size
@@ -653,7 +658,7 @@ impl Database {
             SELECT f.id, f.path, f.name, f.extension, f.size, f.mtime, f.ctime, f.is_dir, f.state_code,
                    f.file_type, f.purpose, f.lifecycle, f.context, f.risk_level, f.suggested_action,
                    f.suggested_target_path, f.suggested_name, f.confidence, f.classification_reason,
-                   f.matched_rules, f.requires_confirmation, f.content_hash,
+                   f.classification_status, f.matched_rules, f.requires_confirmation, f.content_hash,
                    (dg.content_hash IS NOT NULL) AS is_duplicate,
                    f.is_stale, f.last_seen_at, f.last_classified_at, f.classified_rule_version,
                    f.last_classified_mtime, f.last_classified_size
@@ -825,6 +830,7 @@ impl Database {
                     f.suggested_name,
                     f.confidence,
                     f.classification_reason,
+                    f.classification_status,
                     f.matched_rules,
                     f.requires_confirmation,
                     f.content_hash,
@@ -880,7 +886,7 @@ impl Database {
             SELECT f.id, f.path, f.name, f.extension, f.size, f.mtime, f.ctime, f.is_dir, f.state_code,
                    f.file_type, f.purpose, f.lifecycle, f.context, f.risk_level, f.suggested_action,
                    f.suggested_target_path, f.suggested_name, f.confidence, f.classification_reason,
-                   f.matched_rules, f.requires_confirmation, f.content_hash,
+                   f.classification_status, f.matched_rules, f.requires_confirmation, f.content_hash,
                    (dg.content_hash IS NOT NULL) AS is_duplicate,
                    f.is_stale, f.last_seen_at, f.last_classified_at, f.classified_rule_version,
                    f.last_classified_mtime, f.last_classified_size
@@ -1698,6 +1704,26 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
         )?;
         set_schema_version(conn, 9)?;
     }
+    if version < 10 {
+        execute_column_migrations(
+            conn,
+            &[r#"
+                ALTER TABLE files ADD COLUMN classification_status TEXT NOT NULL DEFAULT 'unclassified'
+                CHECK (classification_status IN ('unclassified', 'classified'));
+            "#],
+        )?;
+        conn.execute(
+            r#"
+            UPDATE files
+            SET classification_status = 'classified'
+            WHERE last_classified_at > 0
+               OR matched_rules <> '[]'
+               OR purpose <> 'Unknown'
+            "#,
+            [],
+        )?;
+        set_schema_version(conn, 10)?;
+    }
     Ok(())
 }
 
@@ -2127,16 +2153,17 @@ fn indexed_file_from_row(row: &Row<'_>) -> rusqlite::Result<IndexedFileRow> {
         suggested_name: row.get(16)?,
         confidence: row.get(17)?,
         classification_reason: row.get(18)?,
-        matched_rules: row.get(19)?,
-        requires_confirmation: row.get::<_, i64>(20)? != 0,
-        content_hash: row.get(21)?,
-        is_duplicate: row.get::<_, i64>(22)? != 0,
-        is_stale: row.get::<_, i64>(23)? != 0,
-        last_seen_at: row.get(24)?,
-        last_classified_at: row.get(25)?,
-        classified_rule_version: row.get(26)?,
-        last_classified_mtime: row.get(27)?,
-        last_classified_size: row.get(28)?,
+        classification_status: row.get(19)?,
+        matched_rules: row.get(20)?,
+        requires_confirmation: row.get::<_, i64>(21)? != 0,
+        content_hash: row.get(22)?,
+        is_duplicate: row.get::<_, i64>(23)? != 0,
+        is_stale: row.get::<_, i64>(24)? != 0,
+        last_seen_at: row.get(25)?,
+        last_classified_at: row.get(26)?,
+        classified_rule_version: row.get(27)?,
+        last_classified_mtime: row.get(28)?,
+        last_classified_size: row.get(29)?,
     })
 }
 
@@ -2289,6 +2316,7 @@ fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
         },
         confidence: row.confidence,
         classification_reason: row.classification_reason,
+        classification_status: row.classification_status,
         matched_rules,
         requires_confirmation: row.requires_confirmation,
         last_opened_at: None,
@@ -2324,6 +2352,7 @@ struct ClassificationUpdate {
     suggested_name: String,
     confidence: f64,
     classification_reason: String,
+    classification_status: String,
     matched_rules: String,
     requires_confirmation: bool,
 }
@@ -2353,12 +2382,13 @@ fn execute_classification_batch(
                     suggested_name = ?9,
                     confidence = ?10,
                     classification_reason = ?11,
-                    matched_rules = ?12,
-                    requires_confirmation = ?13,
-                    last_classified_at = ?14,
-                    classified_rule_version = ?15,
-                    last_classified_mtime = ?16,
-                    last_classified_size = ?17
+                    classification_status = ?12,
+                    matched_rules = ?13,
+                    requires_confirmation = ?14,
+                    last_classified_at = ?15,
+                    classified_rule_version = ?16,
+                    last_classified_mtime = ?17,
+                    last_classified_size = ?18
                 WHERE id = ?1
                 "#,
         )?;
@@ -2380,6 +2410,7 @@ fn execute_classification_batch(
                 classification.suggested_name,
                 classification.confidence,
                 classification.classification_reason,
+                classification.classification_status,
                 classification.matched_rules,
                 bool_to_i64(classification.requires_confirmation),
                 classified_at,
@@ -2495,6 +2526,7 @@ fn classify_indexed_file(
             has_conflict,
             &risk_level,
         ),
+        classification_status: CLASSIFICATION_STATUS_CLASSIFIED.to_string(),
         matched_rules: serde_json::to_string(&matched_rule_names)?,
         requires_confirmation,
     })
@@ -4084,6 +4116,39 @@ mod tests {
             file.classification_reason,
             "Indexed by Zen Canvas Tauri backend."
         );
+    }
+
+    #[test]
+    fn file_records_expose_classification_status_for_unclassified_and_classified_files() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file(
+            &db,
+            "file-status-resume",
+            "resume_2026.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        let unclassified = page
+            .files
+            .iter()
+            .find(|file| file.id == "file-status-resume")
+            .expect("unclassified file");
+
+        assert_eq!(unclassified.classification_status, "unclassified");
+
+        db.execute_rules_on_inbox(Vec::new())
+            .expect("execute rules");
+        let page = db.get_paged_files(Some(10), Some(0), None).expect("page");
+        let classified = page
+            .files
+            .iter()
+            .find(|file| file.id == "file-status-resume")
+            .expect("classified file");
+
+        assert_eq!(classified.classification_status, "classified");
     }
 
     #[test]

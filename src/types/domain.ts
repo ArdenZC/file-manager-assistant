@@ -47,6 +47,7 @@ export type SuggestedAction =
 export type DispatchZone = "CoreAssets" | "QuietArchive" | "PrivacyVault" | "CleanupLane";
 export type SearchSourceType = "user_space" | "folder" | "cloud" | "external";
 export type RestoreStatus = "not_restored" | "restored" | "failed" | "unavailable" | "canceled";
+export type ClassificationStatus = "unclassified" | "classified";
 export type FolderNamingLanguage = "en" | "zh";
 export type CloseBehavior = "ask" | "minimize" | "quit";
 export type DefaultScanFolder = "Desktop" | "Downloads" | "Documents";
@@ -85,6 +86,7 @@ export interface FileRecord {
   suggested_name: string;
   confidence: number;
   classification_reason: string;
+  classification_status: ClassificationStatus;
   matched_rules: string[];
   requires_confirmation: boolean;
   dispatch_zone?: DispatchZone;
