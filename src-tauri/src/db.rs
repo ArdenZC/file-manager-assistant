@@ -1450,12 +1450,6 @@ pub async fn execute_rules_for_paths(
 }
 
 fn configure_connection(conn: &mut Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        r#"
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        "#,
-    )?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
