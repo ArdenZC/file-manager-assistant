@@ -2,7 +2,6 @@ use crate::file_ops::OperationLogDto;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,59 +13,15 @@ use std::{
 };
 use sysinfo::Disks;
 use tauri::{AppHandle, Emitter, Runtime, State};
-use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-#[derive(Debug, Error)]
-pub enum DbError {
-    #[error("sqlite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("database pool error: {0}")]
-    Pool(#[from] r2d2::Error),
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-}
+mod types;
+pub use types::*;
 
 #[derive(Clone)]
 pub struct Database {
     path: PathBuf,
     pool: Pool<SqliteConnectionManager>,
-}
-
-#[derive(Debug, Clone)]
-struct IndexedFileRow {
-    id: String,
-    path: String,
-    name: String,
-    extension: String,
-    size: i64,
-    mtime: i64,
-    ctime: i64,
-    is_dir: bool,
-    state_code: i64,
-    file_type: String,
-    purpose: String,
-    lifecycle: String,
-    context: String,
-    risk_level: String,
-    suggested_action: String,
-    suggested_target_path: String,
-    suggested_name: String,
-    confidence: f64,
-    classification_reason: String,
-    classification_status: String,
-    matched_rules: String,
-    requires_confirmation: bool,
-    content_hash: String,
-    is_duplicate: bool,
-    is_stale: bool,
-    last_seen_at: i64,
-    last_classified_at: i64,
-    classified_rule_version: String,
-    last_classified_mtime: i64,
-    last_classified_size: i64,
 }
 
 const CLASSIFY_BATCH_SIZE: usize = 500;
@@ -77,175 +32,6 @@ pub const SEARCH_INDEX_OPTIMIZED_EVENT: &str = "search-index-optimized";
 const CURRENT_SCHEMA_VERSION: i32 = 10;
 const CLASSIFICATION_STATUS_UNCLASSIFIED: &str = "unclassified";
 const CLASSIFICATION_STATUS_CLASSIFIED: &str = "classified";
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InsertFileRequest {
-    pub id: String,
-    pub path: String,
-    pub name: String,
-    pub extension: String,
-    pub size: i64,
-    pub mtime: i64,
-    #[serde(default)]
-    pub ctime: i64,
-    pub is_dir: bool,
-    pub state_code: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileSearchResult {
-    pub id: String,
-    pub path: String,
-    pub name: String,
-    pub extension: String,
-    pub size: i64,
-    pub mtime: i64,
-    pub is_dir: bool,
-    pub state_code: i64,
-    pub rank: f64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileRecordDto {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    pub directory: String,
-    pub extension: String,
-    pub size: i64,
-    pub file_type: String,
-    pub purpose: String,
-    pub lifecycle: String,
-    pub context: String,
-    pub risk_level: String,
-    pub hash: Option<String>,
-    pub created_at: String,
-    pub modified_at: String,
-    pub scanned_at: String,
-    pub last_seen_at: String,
-    pub is_hidden: bool,
-    pub is_deleted: bool,
-    pub is_duplicate: bool,
-    pub suggested_action: String,
-    pub suggested_target_path: String,
-    pub suggested_name: String,
-    pub confidence: f64,
-    pub classification_reason: String,
-    pub classification_status: String,
-    pub matched_rules: Vec<String>,
-    pub requires_confirmation: bool,
-    pub last_opened_at: Option<String>,
-    pub open_count: i64,
-    pub indexed_at: String,
-    pub source_id: Option<String>,
-    pub is_stale: bool,
-    pub state_code: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PagedFilesResult {
-    pub files: Vec<FileRecordDto>,
-    pub total: i64,
-    pub limit: u32,
-    pub offset: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StatsSummary {
-    pub total_files: i64,
-    pub total_size: i64,
-    pub disk_total_size: i64,
-    pub disk_free_size: i64,
-    pub disk_usage_ratio: f64,
-    pub duplicate_files: i64,
-    pub large_files: i64,
-    pub sensitive_files: i64,
-    pub needs_confirmation: i64,
-    pub by_type: HashMap<String, i64>,
-    pub by_lifecycle: HashMap<String, i64>,
-    pub last_scanned_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Rule {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub source: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub priority: f64,
-    #[serde(default)]
-    pub weight: f64,
-    #[serde(default = "default_or", alias = "rootOperator")]
-    pub root_operator: String,
-    #[serde(default)]
-    pub groups: Vec<RuleConditionGroup>,
-    #[serde(default)]
-    pub action: RuleAction,
-    #[serde(default)]
-    pub created_at: String,
-    #[serde(default)]
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RuleConditionGroup {
-    pub id: String,
-    #[serde(default = "default_and")]
-    pub operator: String,
-    #[serde(default)]
-    pub conditions: Vec<RuleCondition>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RuleCondition {
-    pub id: String,
-    pub field: String,
-    pub operator: String,
-    pub value: Value,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct RuleAction {
-    #[serde(default)]
-    pub purpose: Option<String>,
-    #[serde(default)]
-    pub lifecycle: Option<String>,
-    #[serde(default)]
-    pub context: Option<String>,
-    #[serde(default, alias = "riskLevel")]
-    pub risk_level: Option<String>,
-    #[serde(default, alias = "suggestedAction")]
-    pub suggested_action: Option<String>,
-    #[serde(default, alias = "targetTemplate")]
-    pub target_template: Option<String>,
-    #[serde(default, alias = "renameTemplate")]
-    pub rename_template: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuleExecutionSummary {
-    pub scanned: i64,
-    pub updated: i64,
-    pub skipped: i64,
-    pub needs_confirmation: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchIndexOptimizeReport {
-    pub trigger: String,
-    pub duration_ms: u128,
-    pub success: bool,
-    pub error: Option<String>,
-}
 
 impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
@@ -2193,20 +1979,6 @@ fn operation_log_from_row(row: &Row<'_>) -> rusqlite::Result<OperationLogDto> {
     })
 }
 
-struct RuleSqlRow {
-    id: String,
-    name: String,
-    source: String,
-    enabled: bool,
-    priority: f64,
-    weight: f64,
-    root_operator: String,
-    groups_json: String,
-    action_json: String,
-    created_at: String,
-    updated_at: String,
-}
-
 fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<RuleSqlRow> {
     Ok(RuleSqlRow {
         id: row.get(0)?,
@@ -2326,35 +2098,6 @@ fn file_record_from_indexed(row: IndexedFileRow, now: &str) -> FileRecordDto {
         is_stale: row.is_stale,
         state_code: row.state_code,
     }
-}
-
-#[derive(Debug, Clone)]
-struct RuleCandidate {
-    rule: Rule,
-    score: f64,
-}
-
-#[derive(Debug, Clone)]
-struct BuiltinClassification {
-    action: RuleAction,
-    confidence: f64,
-}
-
-#[derive(Debug, Clone)]
-struct ClassificationUpdate {
-    file_type: String,
-    purpose: String,
-    lifecycle: String,
-    context: String,
-    risk_level: String,
-    suggested_action: String,
-    suggested_target_path: String,
-    suggested_name: String,
-    confidence: f64,
-    classification_reason: String,
-    classification_status: String,
-    matched_rules: String,
-    requires_confirmation: bool,
 }
 
 fn execute_classification_batch(
@@ -3212,18 +2955,6 @@ fn condition(field: &str, operator: &str, value: &str) -> RuleCondition {
         operator: operator.to_string(),
         value: Value::String(value.to_string()),
     }
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_or() -> String {
-    "OR".to_string()
-}
-
-fn default_and() -> String {
-    "AND".to_string()
 }
 
 fn parent_directory(path: &str) -> String {
