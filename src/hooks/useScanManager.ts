@@ -38,7 +38,7 @@ export function useScanManager({
       void onRefreshData();
     }
   });
-  const { startScan, reset, ...scanStateData } = scanState;
+  const { startScan, reset } = scanState;
 
   const askForScanPath = useCallback(
     async () => {
