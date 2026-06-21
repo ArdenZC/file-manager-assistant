@@ -80,6 +80,33 @@ const RULE_OPERATOR_OPTIONS = [
 const RULE_PURPOSE_OPTIONS = ["Temporary", "Career", "Finance", "Study", "Project", "Personal", "Media", "Unknown"] as const satisfies readonly Purpose[];
 const RULE_LIFECYCLE_OPTIONS = ["Inbox", "Active", "Reference", "Archive", "Disposable", "Sensitive"] as const satisfies readonly Lifecycle[];
 const RULE_LOGIC_OPTIONS = ["AND", "OR"] as const satisfies readonly RuleOperator[];
+const HUB_BUCKET_KEYS = ["CoreAssets", "QuietArchive", "CleanupLane", "PrivacyVault"] as const;
+
+export type HubBucketKey = typeof HUB_BUCKET_KEYS[number];
+export type HubBucketGroups = Record<HubBucketKey, FileRecord[]>;
+
+function createEmptyHubBucketGroups(): HubBucketGroups {
+  return {
+    CoreAssets: [],
+    QuietArchive: [],
+    CleanupLane: [],
+    PrivacyVault: []
+  };
+}
+
+export function getHubBucketKey(file: FileRecord): HubBucketKey {
+  if (file.risk_level === "Sensitive") return "PrivacyVault";
+  if (file.lifecycle === "Archive") return "QuietArchive";
+  if (file.suggested_action === "DeleteCandidate" || file.suggested_action === "Review") return "CleanupLane";
+  return "CoreAssets";
+}
+
+export function groupFilesByHubBucket(files: readonly FileRecord[]): HubBucketGroups {
+  return files.reduce((groups, file) => {
+    groups[getHubBucketKey(file)].push(file);
+    return groups;
+  }, createEmptyHubBucketGroups());
+}
 
 export interface RevealFileFromCardOptions {
   path: string;
@@ -333,18 +360,12 @@ export function HubView({
   const sortedFiles = useMemo(() => files.filter(isRuleClassified), [files]);
   const pendingFiles = useMemo(() => files.filter((file) => !isRuleClassified(file)), [files]);
   const buckets = useMemo(() => [
-    { key: "CoreAssets", label: t("coreAssets"), description: t("coreAssetsDesc"), tone: "blue" },
-    { key: "QuietArchive", label: t("archiveBox"), description: t("archiveBoxDesc"), tone: "purple" },
-    { key: "CleanupLane", label: t("cleanupLane"), description: t("cleanupLaneDesc"), tone: "slate" },
-    { key: "PrivacyVault", label: t("privacyVault"), description: t("privacyVaultDesc"), tone: "red" }
-  ], [t]);
-
-  function fileBucket(file: FileRecord) {
-    if (file.risk_level === "Sensitive") return "PrivacyVault";
-    if (file.lifecycle === "Archive") return "QuietArchive";
-    if (file.suggested_action === "DeleteCandidate" || file.suggested_action === "Review") return "CleanupLane";
-    return "CoreAssets";
-  }
+    { key: "CoreAssets" as const, label: t("coreAssets"), description: t("coreAssetsDesc"), tone: "blue" },
+    { key: "QuietArchive" as const, label: t("archiveBox"), description: t("archiveBoxDesc"), tone: "purple" },
+    { key: "CleanupLane" as const, label: t("cleanupLane"), description: t("cleanupLaneDesc"), tone: "slate" },
+    { key: "PrivacyVault" as const, label: t("privacyVault"), description: t("privacyVaultDesc"), tone: "red" }
+  ] satisfies Array<{ key: HubBucketKey; label: string; description: string; tone: string }>, [t]);
+  const bucketedFiles = useMemo(() => groupFilesByHubBucket(sortedFiles), [sortedFiles]);
 
   async function runDispatch() {
     if (isDispatching || !files.length) return;
@@ -379,7 +400,7 @@ export function HubView({
 
       <motion.section className="grid min-h-0 grid-cols-2 gap-4 overflow-auto pr-1" variants={listMotion} initial="hidden" animate="show">
         {buckets.map((bucket) => {
-          const bucketFiles = sortedFiles.filter((file) => fileBucket(file) === bucket.key);
+          const bucketFiles = bucketedFiles[bucket.key];
           return (
             <motion.div
               className={cn(panelSurface, "flex min-h-[240px] flex-col gap-3", bucketFiles.length > 0 && "ring-1 ring-blue-400/20")}
