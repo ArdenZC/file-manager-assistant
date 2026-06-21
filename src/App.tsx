@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { tauriApi } from "./api/tauriApi";
 import { AppShell } from "./components/AppShell";
+import {
+  ChromeProvider,
+  FileLibraryProvider,
+  OperationQueueProvider,
+  RulesProvider,
+  ScanProvider,
+  SettingsProvider
+} from "./contexts/AppContexts";
 import { makeTranslator } from "./i18n";
 import { useAppChrome } from "./hooks/useAppChrome";
 import { useDebounce } from "./hooks/useDebounce";
@@ -53,11 +61,11 @@ export function App() {
     (error: unknown) => `${t("settingsSaveFailed")}：${readableError(error)}`,
     [t]
   );
-  const { stats, libraryPage, setLibraryPage, files, selectedFile, setSelectedFileId, loadStats, refresh } =
-    useFileLibrary({
-      debouncedSearchQuery,
-      onError: showError
-    });
+  const fileLibrary = useFileLibrary({
+    debouncedSearchQuery,
+    onError: showError
+  });
+  const { files, setSelectedFileId, refresh } = fileLibrary;
 
   useEffect(() => {
     let cancelled = false;
@@ -93,12 +101,13 @@ export function App() {
     hydrateUserRulesFromSQLite,
     onError: showError
   });
-  const { settings: appSettings, updateSettings } = useAppSettings({
+  const appSettingsState = useAppSettings({
     isDatabaseReady,
     onError: showError,
     formatLoadError: formatSettingsLoadError,
     formatSaveError: formatSettingsSaveError
   });
+  const { settings: appSettings, isLoadingSettings, updateSettings } = appSettingsState;
   useFsWatcher({ onRefreshData: refresh, onError: showError, rules });
 
   const appChrome = useAppChrome({ theme, setTheme, setLanguage });
@@ -156,14 +165,7 @@ export function App() {
     },
     [updateSettings]
   );
-  const {
-    closeBehavior,
-    isCloseChoiceOpen,
-    onCancelCloseChoice,
-    handleWindowAction,
-    requestClose,
-    resolveCloseChoice
-  } = useWindowBehavior({
+  const windowBehavior = useWindowBehavior({
     closeBehavior: appSettings.closeBehavior,
     setCloseBehavior
   });
@@ -223,53 +225,77 @@ export function App() {
       showSuccess(t("ruleDeleted"));
     }
   }, [removeUserRule, showError, showSuccess, t]);
+  const settingsContextValue = useMemo(() => ({
+    settings: appSettings,
+    isLoadingSettings,
+    updateSettings,
+    setFolderNamingLanguage,
+    setDefaultScanFolders,
+    setRestoreRetentionDays,
+    setLaunchAtLogin
+  }), [
+    appSettings,
+    isLoadingSettings,
+    updateSettings,
+    setFolderNamingLanguage,
+    setDefaultScanFolders,
+    setRestoreRetentionDays,
+    setLaunchAtLogin
+  ]);
+  const rulesContextValue = useMemo(() => ({
+    rules,
+    saveRule,
+    toggleRuleEnabled,
+    deleteRule
+  }), [deleteRule, rules, saveRule, toggleRuleEnabled]);
+  const chromeContextValue = useMemo(() => ({
+    ...appChrome,
+    ...windowBehavior,
+    language,
+    setLanguage,
+    theme,
+    setTheme,
+    view,
+    setView,
+    searchQuery,
+    setSearchQuery,
+    toast,
+    onError: showError,
+    t
+  }), [
+    appChrome,
+    windowBehavior,
+    language,
+    setLanguage,
+    theme,
+    setTheme,
+    view,
+    setView,
+    searchQuery,
+    setSearchQuery,
+    toast,
+    showError,
+    t
+  ]);
 
   if (databaseError) {
     return <DatabaseUnavailableState message={databaseError} toast={toast} />;
   }
 
   return (
-    <AppShell
-      {...appChrome}
-      {...scanManager}
-      {...operationQueue}
-      language={language}
-      setLanguage={setLanguage}
-      theme={theme}
-      setTheme={setTheme}
-      view={view}
-      setView={setView}
-      searchQuery={searchQuery}
-      setSearchQuery={setSearchQuery}
-      stats={stats}
-      libraryPage={libraryPage}
-      setLibraryPage={setLibraryPage}
-      selectedFile={selectedFile}
-      setSelectedFileId={setSelectedFileId}
-      files={files}
-      rules={rules}
-      saveRule={saveRule}
-      toggleRuleEnabled={toggleRuleEnabled}
-      deleteRule={deleteRule}
-      toast={toast}
-      onError={showError}
-      closeBehavior={closeBehavior}
-      setCloseBehavior={setCloseBehavior}
-      folderNamingLanguage={appSettings.folderNamingLanguage}
-      setFolderNamingLanguage={setFolderNamingLanguage}
-      defaultScanFolders={appSettings.defaultScanFolders}
-      setDefaultScanFolders={setDefaultScanFolders}
-      restoreRetentionDays={appSettings.restoreRetentionDays}
-      setRestoreRetentionDays={setRestoreRetentionDays}
-      launchAtLogin={appSettings.launchAtLogin}
-      setLaunchAtLogin={setLaunchAtLogin}
-      isCloseChoiceOpen={isCloseChoiceOpen}
-      onCancelCloseChoice={onCancelCloseChoice}
-      handleWindowAction={handleWindowAction}
-      resolveCloseChoice={resolveCloseChoice}
-      loadStats={loadStats}
-      t={t}
-    />
+    <ChromeProvider value={chromeContextValue}>
+      <FileLibraryProvider value={fileLibrary}>
+        <ScanProvider value={scanManager}>
+          <OperationQueueProvider value={operationQueue}>
+            <SettingsProvider value={settingsContextValue}>
+              <RulesProvider value={rulesContextValue}>
+                <AppShell />
+              </RulesProvider>
+            </SettingsProvider>
+          </OperationQueueProvider>
+        </ScanProvider>
+      </FileLibraryProvider>
+    </ChromeProvider>
   );
 }
 

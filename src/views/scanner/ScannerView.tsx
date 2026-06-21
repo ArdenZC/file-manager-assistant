@@ -1,34 +1,16 @@
 import type { CSSProperties } from "react";
 import { FolderSearch, RefreshCw, X } from "lucide-react";
-import type { ScanProgressPayload } from "../../api/tauriApi";
-import type { DashboardStats, FileRecord } from "../../types/domain";
-import type { Translator } from "../../types/ui";
+import { useChromeContext, useFileLibraryContext, useScanContext } from "../../contexts/AppContexts";
 import { formatBytes, percent } from "../../utils/format";
 import { compactPath, splitDisplaySize } from "../../utils/viewHelpers";
 import { cn, glassButton, glassButtonPrimary } from "../../utils/tw";
 import { pageSurface, panelSurface, quietText } from "../shared/ui";
 
-export function ScannerView({
-  stats,
-  files,
-  selectedFolders,
-  isScanning,
-  scanProgress,
-  chooseFolders,
-  scanCommon,
-  cancelScan,
-  t
-}: {
-  stats: DashboardStats;
-  files: FileRecord[];
-  selectedFolders: string[];
-  isScanning: boolean;
-  scanProgress: ScanProgressPayload | null;
-  chooseFolders: () => Promise<void>;
-  scanCommon: () => Promise<void>;
-  cancelScan: () => Promise<void>;
-  t: Translator;
-}) {
+export function ScannerView() {
+  const { t } = useChromeContext();
+  const { stats, files } = useFileLibraryContext();
+  const { selectedFolders, isScanning, scanState, handleChooseFolders, handleScan, cancelScan } = useScanContext();
+  const scanProgress = scanState.progress;
   const scopedTotalSize = files.reduce((sum, file) => sum + file.size, 0);
   const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, scopedTotalSize / stats.diskTotalSize) : 0;
   const clutterItems = files.filter((file) => file.requires_confirmation || file.is_duplicate || file.size > 1024 * 1024 * 1024).length;
@@ -82,7 +64,7 @@ export function ScannerView({
       </section>
 
       <section className="flex items-center justify-center gap-3">
-        <button className={glassButtonPrimary} onClick={scanCommon} disabled={isScanning}>
+        <button className={glassButtonPrimary} onClick={handleScan} disabled={isScanning}>
           <RefreshCw size={18} />
           <span>{isScanning ? t("scanning") : t("scanCommon")}</span>
         </button>
@@ -92,7 +74,7 @@ export function ScannerView({
             <span>{t("cancelScan")}</span>
           </button>
         ) : (
-          <button className={glassButton} onClick={chooseFolders}>
+          <button className={glassButton} onClick={handleChooseFolders}>
             <FolderSearch size={18} />
             <span>{t("chooseFolders")}</span>
           </button>

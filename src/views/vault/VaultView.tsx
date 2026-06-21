@@ -3,7 +3,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
 import { Plus, Search } from "lucide-react";
 import { tauriApi } from "../../api/tauriApi";
-import type { FileQueryResult, FileRecord } from "../../types/domain";
+import { useChromeContext, useFileLibraryContext } from "../../contexts/AppContexts";
+import type { FileRecord } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { shouldVirtualizeList } from "../../utils/virtualization";
 import { cn, glassButton, inputSurface, statusToast, virtualList, virtualSpacer } from "../../utils/tw";
@@ -13,27 +14,15 @@ import { AssetCard } from "./AssetCard";
 const LIBRARY_PAGE_SIZE = 50;
 const ASSET_GRID_ROW_HEIGHT = 234;
 
-export function VaultView({
-  page,
-  setPage,
-  selectedFile,
-  searchQuery,
-  setSearchQuery,
-  setSelectedFileId,
-  onRefreshStats,
-  onError,
-  t
-}: {
-  page: FileQueryResult;
-  setPage: (page: FileQueryResult | ((current: FileQueryResult) => FileQueryResult)) => void;
-  selectedFile?: FileRecord;
-  searchQuery: string;
-  setSearchQuery: (searchQuery: string) => void;
-  setSelectedFileId: (id: string) => void;
-  onRefreshStats: () => Promise<void>;
-  onError: (message: string) => void;
-  t: Translator;
-}) {
+export function VaultView() {
+  const { searchQuery, setSearchQuery, onError, t } = useChromeContext();
+  const {
+    libraryPage: page,
+    setLibraryPage: setPage,
+    selectedFile,
+    setSelectedFileId,
+    loadStats
+  } = useFileLibraryContext();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -52,13 +41,13 @@ export function VaultView({
         : next
       );
       if (!append && next.files[0]) setSelectedFileId(next.files[0].id);
-      await onRefreshStats();
+      await loadStats();
     } catch (caught) {
       if (requestId === requestIdRef.current) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [onRefreshStats, searchQuery, setPage, setSelectedFileId]);
+  }, [loadStats, searchQuery, setPage, setSelectedFileId]);
 
   useEffect(() => {
     void loadPage(0, false);

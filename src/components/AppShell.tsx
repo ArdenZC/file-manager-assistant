@@ -1,4 +1,3 @@
-import type { Dispatch, RefObject, SetStateAction } from "react";
 import {
   Archive,
   Clock3,
@@ -15,25 +14,17 @@ import {
   Square,
   X
 } from "lucide-react";
-import type { OperationProgressPayload, RuleExecutionSummary, ScanProgressPayload } from "../api/tauriApi";
 import { CommandModal } from "./CommandModal";
 import { ViewErrorBoundary } from "./ErrorBoundary";
 import { AmbientMesh, CloseChoiceDialog, TitlebarTools, ZenMark } from "./ShellChrome";
+import {
+  useChromeContext,
+  useFileLibraryContext,
+  useOperationQueueContext,
+  useScanContext
+} from "../contexts/AppContexts";
 import { hideToBackground } from "../hooks/useWindowBehavior";
-import type { Language } from "../i18n";
-import type {
-  CloseBehavior,
-  DashboardStats,
-  DefaultScanFolder,
-  FileQueryResult,
-  FileRecord,
-  FolderNamingLanguage,
-  OperationLog,
-  OperationPreview,
-  RestoreRetentionDays,
-  Rule
-} from "../types/domain";
-import type { ThemeMode, Translator, View } from "../types/ui";
+import type { Translator, View } from "../types/ui";
 import { formatDate } from "../utils/format";
 import { cn, glassButton, glassButtonPrimary, statusToast, toastTone } from "../utils/tw";
 import {
@@ -64,138 +55,91 @@ const navItemActive = "bg-blue-500/10 text-[var(--ink)] shadow-sm";
 const workspaceClass = "min-w-0 overflow-hidden px-6 py-5";
 const viewStageClass = "h-[calc(100vh-170px)] overflow-hidden";
 
-interface AppShellProps {
-  language: Language;
-  setLanguage: (language: Language) => void;
-  theme: ThemeMode;
-  setTheme: (theme: ThemeMode) => void;
-  effectiveTheme: Exclude<ThemeMode, "system">;
-  view: View;
-  setView: (view: View) => void;
-  searchQuery: string;
-  setSearchQuery: (searchQuery: string) => void;
-  stats: DashboardStats;
-  libraryPage: FileQueryResult;
-  setLibraryPage: Dispatch<SetStateAction<FileQueryResult>>;
-  selectedFile: FileRecord | undefined;
-  setSelectedFileId: Dispatch<SetStateAction<string>>;
-  files: FileRecord[];
-  rules: Rule[];
-  saveRule: (rule: Rule) => Promise<void>;
-  toggleRuleEnabled: (rule: Rule, enabled: boolean) => Promise<void>;
-  deleteRule: (rule: Rule) => Promise<void>;
-  runDispatch: () => Promise<RuleExecutionSummary>;
-  selectedFolders: string[];
-  isScanning: boolean;
-  scanState: { progress: ScanProgressPayload | null };
-  handleScan: () => Promise<void>;
-  handleChooseFolders: () => Promise<void>;
-  cancelScan: () => Promise<void>;
-  operationLogs: OperationLog[];
-  selectedOperationIds: Set<string>;
-  setSelectedOperationIds: Dispatch<SetStateAction<Set<string>>>;
-  displayPreviews: OperationPreview[];
-  previewActionCount: number;
-  operationProgress: OperationProgressPayload | null;
-  isOperationCanceling: boolean;
-  executeSelected: () => Promise<void>;
-  restoreOperationLogs: (logs: OperationLog[]) => Promise<void>;
-  cancelOperations: () => Promise<void>;
-  onRenamePreview: (id: string, name: string) => void;
-  toast: { message: string; type: "success" | "error" | "info" } | null;
-  onError: (message: string) => void;
-  commandInputRef: RefObject<HTMLInputElement | null>;
-  isCommandOpen: boolean;
-  setIsCommandOpen: Dispatch<SetStateAction<boolean>>;
-  platform: NodeJS.Platform | "browser";
-  isWindows: boolean;
-  hotkeyLabel: string;
-  isSearchMode: boolean;
-  closeBehavior: CloseBehavior;
-  setCloseBehavior: (next: CloseBehavior) => Promise<boolean>;
-  folderNamingLanguage: FolderNamingLanguage;
-  setFolderNamingLanguage: (next: FolderNamingLanguage) => Promise<boolean>;
-  defaultScanFolders: DefaultScanFolder[];
-  setDefaultScanFolders: (next: DefaultScanFolder[]) => Promise<boolean>;
-  restoreRetentionDays: RestoreRetentionDays;
-  setRestoreRetentionDays: (next: RestoreRetentionDays) => Promise<boolean>;
-  launchAtLogin: boolean;
-  setLaunchAtLogin: (next: boolean) => Promise<boolean>;
-  isCloseChoiceOpen: boolean;
-  handleWindowAction: (action: "minimize" | "maximize" | "close") => Promise<void>;
-  resolveCloseChoice: (action: "minimize" | "quit", remember: boolean) => Promise<void>;
-  onCancelCloseChoice: () => void;
-  loadStats: () => Promise<void>;
-  t: Translator;
-}
+export function AppShell() {
+  const {
+    isSearchMode,
+    isWindows,
+    setIsCommandOpen,
+    hotkeyLabel,
+    view,
+    toast,
+    isCommandOpen,
+    isCloseChoiceOpen,
+    onCancelCloseChoice,
+    resolveCloseChoice,
+    t
+  } = useChromeContext();
+  const { stats } = useFileLibraryContext();
 
-export function AppShell(props: AppShellProps) {
-  if (props.isSearchMode) return <SearchWindow {...props} />;
+  if (isSearchMode) return <SearchWindow />;
 
-  const nav = navItems(props.t);
-  const activeLabel = nav.find((item) => item.id === props.view)?.label ?? props.t("spaceScan");
-  const scannerLastScanLabel = props.stats.lastScannedAt ? formatDate(props.stats.lastScannedAt) : props.t("notScannedYet");
+  const nav = navItems(t);
+  const activeLabel = nav.find((item) => item.id === view)?.label ?? t("spaceScan");
+  const scannerLastScanLabel = stats.lastScannedAt ? formatDate(stats.lastScannedAt) : t("notScannedYet");
   const headingDescription =
-    props.view === "scanner"
-      ? `${props.t("lastScan")}: ${scannerLastScanLabel}`
-      : props.stats.lastScannedAt
-        ? `${props.t("lastScan")}: ${formatDate(props.stats.lastScannedAt)}`
-        : props.t("notScannedYet");
+    view === "scanner"
+      ? `${t("lastScan")}: ${scannerLastScanLabel}`
+      : stats.lastScannedAt
+        ? `${t("lastScan")}: ${formatDate(stats.lastScannedAt)}`
+        : t("notScannedYet");
 
   return (
     <div className={appRoot}>
       <AmbientMesh />
       <header className={titlebar}>
         <div className="flex items-center justify-start">
-          {!props.isWindows ? <MacWindowControls {...props} /> : <TitlebarTools {...props} />}
+          {!isWindows ? <MacWindowControls /> : <ChromeTools />}
         </div>
         <div className="flex items-center justify-center">
-          <button className={cn(spotlightButton, noDrag)} onClick={() => props.setIsCommandOpen(true)}>
+          <button className={cn(spotlightButton, noDrag)} onClick={() => setIsCommandOpen(true)}>
             <Search size={15} />
-            <span>{props.t("globalSearch")}</span>
-            <kbd>{props.hotkeyLabel}</kbd>
+            <span>{t("globalSearch")}</span>
+            <kbd>{hotkeyLabel}</kbd>
           </button>
         </div>
         <div className="flex items-center justify-end">
-          {!props.isWindows ? <TitlebarTools {...props} /> : <WindowsControls {...props} />}
+          {!isWindows ? <ChromeTools /> : <WindowsControls />}
         </div>
       </header>
       <div className={workspaceShell}>
-        <Sidebar {...props} nav={nav} />
+        <Sidebar nav={nav} />
         <main className={workspaceClass}>
-          <ViewHeading {...props} activeLabel={activeLabel} headingDescription={headingDescription} />
-          {props.toast && (
-            <div className={cn(statusToast, toastTone(props.toast.type))}>
-              {props.toast.message}
+          <ViewHeading activeLabel={activeLabel} headingDescription={headingDescription} />
+          {toast && (
+            <div className={cn(statusToast, toastTone(toast.type))}>
+              {toast.message}
             </div>
           )}
           <div className={viewStageClass}>
-            <ViewErrorBoundary key={props.view}>
-              <AppViewContent {...props} />
+            <ViewErrorBoundary key={view}>
+              <AppViewContent />
             </ViewErrorBoundary>
           </div>
         </main>
       </div>
-      {props.isCommandOpen && <CommandLauncher {...props} />}
-      {props.isCloseChoiceOpen && (
-        <CloseChoiceDialog t={props.t} onCancel={props.onCancelCloseChoice} onChoose={props.resolveCloseChoice} />
+      {isCommandOpen && <CommandLauncher />}
+      {isCloseChoiceOpen && (
+        <CloseChoiceDialog t={t} onCancel={onCancelCloseChoice} onChoose={resolveCloseChoice} />
       )}
     </div>
   );
 }
 
-function SearchWindow(props: AppShellProps) {
+function SearchWindow() {
   return (
     <div className={cn(searchWindowRoot, "flex items-center justify-center")}>
-      <CommandLauncher {...props} standalone />
+      <CommandLauncher standalone />
     </div>
   );
 }
 
-function CommandLauncher(props: AppShellProps & { standalone?: boolean }) {
+function CommandLauncher({ standalone = false }: { standalone?: boolean }) {
+  const { commandInputRef, setView, setIsCommandOpen, platform, t } = useChromeContext();
+  const { setSelectedFileId } = useFileLibraryContext();
+
   function closeCommand() {
-    props.setIsCommandOpen(false);
-    if (props.standalone) {
+    setIsCommandOpen(false);
+    if (standalone) {
       void hideToBackground().catch((error) => {
         console.error("Failed to hide search window.", error);
       });
@@ -204,18 +148,34 @@ function CommandLauncher(props: AppShellProps & { standalone?: boolean }) {
 
   return (
     <CommandModal
-      inputRef={props.commandInputRef}
-      setView={props.setView}
-      setSelectedFileId={props.setSelectedFileId}
+      inputRef={commandInputRef}
+      setView={setView}
+      setSelectedFileId={setSelectedFileId}
       onClose={closeCommand}
-      platform={props.platform}
-      t={props.t}
-      standalone={props.standalone}
+      platform={platform}
+      t={t}
+      standalone={standalone}
     />
   );
 }
 
-function MacWindowControls({ handleWindowAction, t }: AppShellProps) {
+function ChromeTools() {
+  const { language, theme, effectiveTheme, setLanguage, setTheme } = useChromeContext();
+
+  return (
+    <TitlebarTools
+      language={language}
+      theme={theme}
+      effectiveTheme={effectiveTheme}
+      setLanguage={setLanguage}
+      setTheme={setTheme}
+    />
+  );
+}
+
+function MacWindowControls() {
+  const { handleWindowAction, t } = useChromeContext();
+
   return (
     <div className={cn("flex items-center gap-2", noDrag)} aria-label="Window controls">
       <button className="h-3 w-3 rounded-full bg-red-500 shadow-sm" onClick={() => handleWindowAction("close")} aria-label={t("close")} />
@@ -225,7 +185,9 @@ function MacWindowControls({ handleWindowAction, t }: AppShellProps) {
   );
 }
 
-function WindowsControls({ handleWindowAction, t }: AppShellProps) {
+function WindowsControls() {
+  const { handleWindowAction, t } = useChromeContext();
+
   return (
     <div className={cn("flex items-center overflow-hidden rounded-lg border border-[var(--line-dark)] bg-white/30 dark:bg-white/5", noDrag)} aria-label="Window controls">
       <button className="grid h-8 w-10 place-items-center text-[var(--muted)] transition hover:bg-white/50 hover:text-[var(--ink)] dark:hover:bg-white/10" onClick={() => handleWindowAction("minimize")} aria-label={t("minimize")}>
@@ -241,28 +203,31 @@ function WindowsControls({ handleWindowAction, t }: AppShellProps) {
   );
 }
 
-function Sidebar(props: AppShellProps & { nav: ReturnType<typeof navItems> }) {
+function Sidebar({ nav }: { nav: ReturnType<typeof navItems> }) {
+  const { view, setView, t } = useChromeContext();
+  const { previewActionCount } = useOperationQueueContext();
+
   return (
     <aside className={sidebarClass}>
       <div className="flex items-center gap-3">
         <ZenMark />
         <div>
-          <strong className="block text-base font-semibold">{props.t("appName")}</strong>
-          <span className="block text-xs text-[var(--muted)]">{props.t("appSubtitle")}</span>
+          <strong className="block text-base font-semibold">{t("appName")}</strong>
+          <span className="block text-xs text-[var(--muted)]">{t("appSubtitle")}</span>
         </div>
       </div>
       <nav className="flex flex-1 flex-col gap-1">
-        {props.nav.map((item, index) => (
+        {nav.map((item, index) => (
           <button
             key={item.id}
-            className={cn(navItemBase, props.view === item.id && navItemActive, index === 4 && "mt-3 border-t border-[var(--line-dark)] pt-4")}
-            onClick={() => props.setView(item.id)}
+            className={cn(navItemBase, view === item.id && navItemActive, index === 4 && "mt-3 border-t border-[var(--line-dark)] pt-4")}
+            onClick={() => setView(item.id)}
           >
             <item.icon size={18} />
             <span>{item.label}</span>
-            {item.id === "preview" && props.previewActionCount > 0 && (
-              <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500/10 px-1 text-[11px] font-medium text-red-600 dark:text-red-300" aria-label={`${props.previewActionCount} pending`}>
-                {props.previewActionCount}
+            {item.id === "preview" && previewActionCount > 0 && (
+              <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500/10 px-1 text-[11px] font-medium text-red-600 dark:text-red-300" aria-label={`${previewActionCount} pending`}>
+                {previewActionCount}
               </span>
             )}
           </button>
@@ -271,30 +236,39 @@ function Sidebar(props: AppShellProps & { nav: ReturnType<typeof navItems> }) {
       <div className="mt-auto flex items-start gap-3 rounded-2xl border border-[var(--line-dark)] bg-white/30 p-3 text-sm dark:bg-white/5">
         <LockKeyhole size={18} />
         <div>
-          <strong className="block text-[var(--ink)]">{props.t("privateByDefault")}</strong>
-          <span className="block text-xs text-[var(--muted)]">{props.t("privacyLine")}</span>
+          <strong className="block text-[var(--ink)]">{t("privateByDefault")}</strong>
+          <span className="block text-xs text-[var(--muted)]">{t("privacyLine")}</span>
         </div>
       </div>
     </aside>
   );
 }
 
-function ViewHeading(props: AppShellProps & { activeLabel: string; headingDescription: string }) {
+function ViewHeading({
+  activeLabel,
+  headingDescription
+}: {
+  activeLabel: string;
+  headingDescription: string;
+}) {
+  const { view, t } = useChromeContext();
+  const { isScanning, handleChooseFolders, handleScan } = useScanContext();
+
   return (
     <div className="mb-4 flex items-center justify-between gap-4">
       <div>
-        <h1 className="m-0 text-2xl font-semibold">{props.activeLabel}</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">{props.headingDescription}</p>
+        <h1 className="m-0 text-2xl font-semibold">{activeLabel}</h1>
+        <p className="mt-1 text-sm text-[var(--muted)]">{headingDescription}</p>
       </div>
-      {props.view !== "scanner" && (
+      {view !== "scanner" && (
         <div className="flex items-center gap-2">
-          <button className={glassButton} onClick={props.handleChooseFolders} disabled={props.isScanning}>
+          <button className={glassButton} onClick={handleChooseFolders} disabled={isScanning}>
             <FolderSearch size={17} />
-            <span>{props.t("chooseFolders")}</span>
+            <span>{t("chooseFolders")}</span>
           </button>
-          <button className={glassButtonPrimary} onClick={props.handleScan} disabled={props.isScanning}>
-            <RefreshCw size={17} className={props.isScanning ? "animate-spin" : ""} />
-            <span>{props.t("scanCommon")}</span>
+          <button className={glassButtonPrimary} onClick={handleScan} disabled={isScanning}>
+            <RefreshCw size={17} className={isScanning ? "animate-spin" : ""} />
+            <span>{t("scanCommon")}</span>
           </button>
         </div>
       )}
@@ -302,96 +276,16 @@ function ViewHeading(props: AppShellProps & { activeLabel: string; headingDescri
   );
 }
 
-function AppViewContent(props: AppShellProps) {
-  if (props.view === "scanner") {
-    return (
-      <ScannerView
-        stats={props.stats}
-        files={props.files}
-        selectedFolders={props.selectedFolders}
-        isScanning={props.isScanning}
-        scanProgress={props.scanState.progress}
-        chooseFolders={props.handleChooseFolders}
-        scanCommon={props.handleScan}
-        cancelScan={props.cancelScan}
-        t={props.t}
-      />
-    );
-  }
-  if (props.view === "organize") return <HubView files={props.files} rules={props.rules} onRunDispatch={props.runDispatch} onError={props.onError} setView={props.setView} t={props.t} />;
-  if (props.view === "library") {
-    return (
-      <VaultView
-        page={props.libraryPage}
-        setPage={props.setLibraryPage}
-        selectedFile={props.selectedFile}
-        searchQuery={props.searchQuery}
-        setSearchQuery={props.setSearchQuery}
-        setSelectedFileId={props.setSelectedFileId}
-        onRefreshStats={props.loadStats}
-        onError={props.onError}
-        t={props.t}
-      />
-    );
-  }
-  if (props.view === "preview") {
-    return (
-      <TimelineView
-        previews={props.displayPreviews}
-        selectedIds={props.selectedOperationIds}
-        setSelectedIds={props.setSelectedOperationIds}
-        onRenamePreview={props.onRenamePreview}
-        executeSelected={props.executeSelected}
-        operationProgress={props.operationProgress}
-        isOperationCanceling={props.isOperationCanceling}
-        cancelOperations={props.cancelOperations}
-        t={props.t}
-      />
-    );
-  }
-  if (props.view === "rules") {
-    return (
-      <RulesView
-        rules={props.rules}
-        onSave={props.saveRule}
-        onToggleRuleEnabled={props.toggleRuleEnabled}
-        onDeleteRule={props.deleteRule}
-        t={props.t}
-      />
-    );
-  }
-  if (props.view === "restore") {
-    return (
-      <RestoreView
-        logs={props.operationLogs}
-        onRestore={props.restoreOperationLogs}
-        operationProgress={props.operationProgress}
-        isOperationCanceling={props.isOperationCanceling}
-        cancelOperations={props.cancelOperations}
-        t={props.t}
-      />
-    );
-  }
-  return (
-    <SettingsView
-      language={props.language}
-      setLanguage={props.setLanguage}
-      theme={props.theme}
-      setTheme={props.setTheme}
-      platform={props.platform}
-      closeBehavior={props.closeBehavior}
-      setCloseBehavior={props.setCloseBehavior}
-      folderNamingLanguage={props.folderNamingLanguage}
-      setFolderNamingLanguage={props.setFolderNamingLanguage}
-      defaultScanFolders={props.defaultScanFolders}
-      setDefaultScanFolders={props.setDefaultScanFolders}
-      restoreRetentionDays={props.restoreRetentionDays}
-      setRestoreRetentionDays={props.setRestoreRetentionDays}
-      launchAtLogin={props.launchAtLogin}
-      setLaunchAtLogin={props.setLaunchAtLogin}
-      t={props.t}
-    />
-  );
+function AppViewContent() {
+  const { view } = useChromeContext();
+
+  if (view === "scanner") return <ScannerView />;
+  if (view === "organize") return <HubView />;
+  if (view === "library") return <VaultView />;
+  if (view === "preview") return <TimelineView />;
+  if (view === "rules") return <RulesView />;
+  if (view === "restore") return <RestoreView />;
+  return <SettingsView />;
 }
 
 function navItems(t: Translator) {
@@ -403,5 +297,5 @@ function navItems(t: Translator) {
     { id: "rules" as const, label: t("ruleEngine"), icon: SlidersHorizontal },
     { id: "restore" as const, label: t("restoreRecords"), icon: Clock3 },
     { id: "settings" as const, label: t("settings"), icon: Settings }
-  ];
+  ] satisfies Array<{ id: View; label: string; icon: typeof Radar }>;
 }

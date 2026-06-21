@@ -2,8 +2,13 @@ import { useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
 import { Check, File, FolderOpen } from "lucide-react";
-import type { RuleExecutionSummary } from "../../api/tauriApi";
-import type { FileRecord, Rule } from "../../types/domain";
+import {
+  useChromeContext,
+  useFileLibraryContext,
+  useOperationQueueContext,
+  useRulesContext
+} from "../../contexts/AppContexts";
+import type { FileRecord } from "../../types/domain";
 import type { Translator, View } from "../../types/ui";
 import { formatBytes } from "../../utils/format";
 import { shouldVirtualizeList } from "../../utils/virtualization";
@@ -41,21 +46,11 @@ export function groupFilesByHubBucket(files: readonly FileRecord[]): HubBucketGr
   }, createEmptyHubBucketGroups());
 }
 
-export function HubView({
-  files,
-  rules,
-  onRunDispatch,
-  onError,
-  setView,
-  t
-}: {
-  files: FileRecord[];
-  rules: Rule[];
-  onRunDispatch: () => Promise<RuleExecutionSummary | void>;
-  onError: (message: string) => void;
-  setView: (view: View) => void;
-  t: Translator;
-}) {
+export function HubView() {
+  const { t, setView, onError } = useChromeContext();
+  const { files } = useFileLibraryContext();
+  const { rules } = useRulesContext();
+  const { runDispatch } = useOperationQueueContext();
   const [isDispatching, setIsDispatching] = useState(false);
   const activeRuleCount = useMemo(() => rules.filter((rule) => rule.enabled).length, [rules]);
   const sortedFiles = useMemo(() => files.filter(isRuleClassified), [files]);
@@ -68,11 +63,11 @@ export function HubView({
   ] satisfies Array<{ key: HubBucketKey; label: string; description: string; tone: string }>, [t]);
   const bucketedFiles = useMemo(() => groupFilesByHubBucket(sortedFiles), [sortedFiles]);
 
-  async function runDispatch() {
+  async function dispatchFiles() {
     if (isDispatching || !files.length) return;
     setIsDispatching(true);
     try {
-      await onRunDispatch();
+      await runDispatch();
       setIsDispatching(false);
       setView("preview");
     } catch {
@@ -91,7 +86,7 @@ export function HubView({
         <motion.button
           whileTap={{ scale: 0.985 }}
           className={cn(glassButtonPrimary, "w-full")}
-          onClick={runDispatch}
+          onClick={dispatchFiles}
           disabled={isDispatching || !files.length}
           title={`${activeRuleCount} active rules`}
         >
@@ -326,4 +321,3 @@ function FileCard({
     </motion.div>
   );
 }
-

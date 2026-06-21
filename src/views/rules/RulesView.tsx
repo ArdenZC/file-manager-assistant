@@ -2,6 +2,7 @@ import { memo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
 import { Plus, Trash2 } from "lucide-react";
+import { useChromeContext, useRulesContext } from "../../contexts/AppContexts";
 import type { Lifecycle, Purpose, Rule, RuleCondition, RuleConditionGroup, RuleOperator } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { nowIso } from "../../utils/viewHelpers";
@@ -21,19 +22,14 @@ import {
 
 const RULE_ROW_HEIGHT = 68;
 
-export function RulesView({
-  rules,
-  onSave,
-  onToggleRuleEnabled,
-  onDeleteRule,
-  t
-}: {
-  rules: Rule[];
-  onSave: (rule: Rule) => Promise<void>;
-  onToggleRuleEnabled?: (rule: Rule, enabled: boolean) => Promise<void> | void;
-  onDeleteRule?: (rule: Rule) => Promise<void> | void;
-  t: Translator;
-}) {
+export function RulesView() {
+  const { t } = useChromeContext();
+  const {
+    rules,
+    saveRule: onSave,
+    toggleRuleEnabled: onToggleRuleEnabled,
+    deleteRule: onDeleteRule
+  } = useRulesContext();
   const [name, setName] = useState("Screenshots to Inbox");
   const [rootOperator, setRootOperator] = useState<RuleOperator>("AND");
   const [groups, setGroups] = useState<RuleConditionGroup[]>(() => [createRuleGroup()]);

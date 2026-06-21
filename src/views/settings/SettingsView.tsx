@@ -1,47 +1,34 @@
 import { useState } from "react";
+import { useChromeContext, useSettingsContext } from "../../contexts/AppContexts";
 import { nextDefaultScanFolders } from "../../hooks/useAppSettings";
-import type { Language } from "../../i18n";
 import type { CloseBehavior, DefaultScanFolder, FolderNamingLanguage, RestoreRetentionDays } from "../../types/domain";
-import type { ThemeMode, Translator } from "../../types/ui";
 import { defaultPlatformAccelerator } from "../../utils/viewHelpers";
 import { cn, statusToast } from "../../utils/tw";
 import { mutedText, pageSurface, panelSurface, quietText, segmented, segmentButton, sourceBadge, toggleSwitch, SectionTitle } from "../shared/ui";
 
-export function SettingsView({
-  language,
-  setLanguage,
-  theme,
-  setTheme,
-  platform,
-  closeBehavior,
-  setCloseBehavior,
-  folderNamingLanguage,
-  setFolderNamingLanguage,
-  defaultScanFolders,
-  setDefaultScanFolders,
-  restoreRetentionDays,
-  setRestoreRetentionDays,
-  launchAtLogin,
-  setLaunchAtLogin,
-  t
-}: {
-  language: Language;
-  setLanguage: (language: Language) => void;
-  theme: ThemeMode;
-  setTheme: (theme: ThemeMode) => void;
-  platform: NodeJS.Platform | "browser";
-  closeBehavior: CloseBehavior;
-  setCloseBehavior: (behavior: CloseBehavior) => Promise<boolean>;
-  folderNamingLanguage: FolderNamingLanguage;
-  setFolderNamingLanguage: (language: FolderNamingLanguage) => Promise<boolean>;
-  defaultScanFolders: DefaultScanFolder[];
-  setDefaultScanFolders: (folders: DefaultScanFolder[]) => Promise<boolean>;
-  restoreRetentionDays: RestoreRetentionDays;
-  setRestoreRetentionDays: (days: RestoreRetentionDays) => Promise<boolean>;
-  launchAtLogin: boolean;
-  setLaunchAtLogin: (enabled: boolean) => Promise<boolean>;
-  t: Translator;
-}) {
+export function SettingsView() {
+  const {
+    language,
+    setLanguage,
+    theme,
+    setTheme,
+    platform,
+    closeBehavior,
+    setCloseBehavior,
+    t
+  } = useChromeContext();
+  const {
+    settings: {
+      folderNamingLanguage,
+      defaultScanFolders,
+      restoreRetentionDays,
+      launchAtLogin
+    },
+    setFolderNamingLanguage,
+    setDefaultScanFolders,
+    setRestoreRetentionDays,
+    setLaunchAtLogin
+  } = useSettingsContext();
   const hotkey = defaultPlatformAccelerator(platform);
   const [settingsStatus, setSettingsStatus] = useState("");
 

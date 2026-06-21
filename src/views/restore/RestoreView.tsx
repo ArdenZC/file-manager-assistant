@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, RotateCcw, X } from "lucide-react";
-import type { OperationProgressPayload } from "../../api/tauriApi";
+import { useChromeContext, useOperationQueueContext } from "../../contexts/AppContexts";
 import type { OperationLog } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { compactPath } from "../../utils/viewHelpers";
@@ -8,21 +8,15 @@ import { cn, emptyState, glassButtonPrimary, sectionTitle } from "../../utils/tw
 import { OperationProgressPanel } from "../timeline/TimelineView";
 import { compactRowSurface, mutedText, panelSurface, rowSurface, SectionTitle } from "../shared/ui";
 
-export function RestoreView({
-  logs,
-  onRestore,
-  operationProgress,
-  isOperationCanceling,
-  cancelOperations,
-  t
-}: {
-  logs: OperationLog[];
-  onRestore: (logs: OperationLog[]) => Promise<void>;
-  operationProgress: OperationProgressPayload | null;
-  isOperationCanceling: boolean;
-  cancelOperations: () => Promise<void>;
-  t: Translator;
-}) {
+export function RestoreView() {
+  const { t } = useChromeContext();
+  const {
+    operationLogs: logs,
+    restoreOperationLogs: onRestore,
+    operationProgress,
+    isOperationCanceling,
+    cancelOperations
+  } = useOperationQueueContext();
   const [selectedBatchId, setSelectedBatchId] = useState("");
   const batches = useMemo(() => groupOperationLogs(logs), [logs]);
   const selectedBatch = batches.find((batch) => batch.batchId === selectedBatchId) ?? batches[0];
