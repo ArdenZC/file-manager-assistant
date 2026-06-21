@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { revealFileFromCard } from "../src/views/AppViews";
+import { revealFileFromCard } from "../src/views/shared/cardActions";
 
 describe("reveal in folder card action", () => {
   it("stops card selection and reports reveal failures", async () => {
