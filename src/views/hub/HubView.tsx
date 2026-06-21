@@ -4,10 +4,10 @@ import { motion } from "motion/react";
 import { Check, File, FolderOpen } from "lucide-react";
 import {
   useChromeContext,
-  useFileLibraryContext,
-  useOperationQueueContext,
   useRulesContext
 } from "../../contexts/AppContexts";
+import { useFileLibraryStore } from "../../store/useFileLibraryStore";
+import { useOperationQueueStore } from "../../store/useOperationQueueStore";
 import type { FileRecord } from "../../types/domain";
 import type { Translator, View } from "../../types/ui";
 import { formatBytes } from "../../utils/format";
@@ -48,9 +48,9 @@ export function groupFilesByHubBucket(files: readonly FileRecord[]): HubBucketGr
 
 export function HubView() {
   const { t, setView, onError } = useChromeContext();
-  const { files } = useFileLibraryContext();
+  const files = useFileLibraryStore((state) => state.libraryPage.files);
   const { rules } = useRulesContext();
-  const { runDispatch } = useOperationQueueContext();
+  const runDispatch = useOperationQueueStore((state) => state.runDispatch);
   const [isDispatching, setIsDispatching] = useState(false);
   const activeRuleCount = useMemo(() => rules.filter((rule) => rule.enabled).length, [rules]);
   const sortedFiles = useMemo(() => files.filter(isRuleClassified), [files]);

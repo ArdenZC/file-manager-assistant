@@ -28,6 +28,7 @@ const viewFiles = [
 const appViews = viewFiles.map(read).join("\n");
 const app = read("src/App.tsx");
 const appShell = read("src/components/AppShell.tsx");
+const fileLibraryStore = read("src/store/useFileLibraryStore.ts");
 const runtimeUi = [app, appShell, appViews].join("\n");
 const api = read("src/api/tauriApi.ts");
 const dbFiles = [
@@ -52,7 +53,7 @@ assert(api.includes("getStatsSummary"), "Tauri API must expose getStatsSummary."
 assert(!api.includes("fetchDatabase"), "Tauri API must not expose giant fetchDatabase.");
 assert(!db.includes("fetch_database"), "Rust backend must not register fetch_database.");
 assert(appViews.includes("IntersectionObserver"), "File library must lazy-load with IntersectionObserver.");
-assert(appViews.includes("LIBRARY_PAGE_SIZE = 50"), "File library page size should remain bounded at 50.");
+assert(fileLibraryStore.includes("LIBRARY_PAGE_SIZE = 50"), "File library page size should remain bounded at 50.");
 assert(!runtimeUi.includes("demoData"), "Runtime UI must not depend on demo data.");
 assert(!runtimeUi.includes("window.fileManager"), "Runtime UI must not depend on Electron preload APIs.");
 assert(!runtimeUi.includes("snapshot"), "Runtime UI must not keep an all-files snapshot.");

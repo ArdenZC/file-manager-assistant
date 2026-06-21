@@ -3,7 +3,10 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
 import { Plus, Search } from "lucide-react";
 import { tauriApi } from "../../api/tauriApi";
-import { useChromeContext, useFileLibraryContext } from "../../contexts/AppContexts";
+import { useChromeContext } from "../../contexts/AppContexts";
+import { useDebounce } from "../../hooks/useDebounce";
+import { useAppStore } from "../../store/useAppStore";
+import { LIBRARY_PAGE_SIZE, useFileLibraryStore } from "../../store/useFileLibraryStore";
 import type { FileRecord } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { shouldVirtualizeList } from "../../utils/virtualization";
@@ -11,18 +14,19 @@ import { cn, glassButton, inputSurface, statusToast, virtualList, virtualSpacer 
 import { listMotion, mutedText, pageSurface, segmentButton } from "../shared/ui";
 import { AssetCard } from "./AssetCard";
 
-const LIBRARY_PAGE_SIZE = 50;
 const ASSET_GRID_ROW_HEIGHT = 234;
 
 export function VaultView() {
-  const { searchQuery, setSearchQuery, onError, t } = useChromeContext();
-  const {
-    libraryPage: page,
-    setLibraryPage: setPage,
-    selectedFile,
-    setSelectedFileId,
-    loadStats
-  } = useFileLibraryContext();
+  const { onError, t } = useChromeContext();
+  const searchQuery = useAppStore((state) => state.searchQuery);
+  const setSearchQuery = useAppStore((state) => state.setSearchQuery);
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
+  const page = useFileLibraryStore((state) => state.libraryPage);
+  const selectedFileId = useFileLibraryStore((state) => state.selectedFileId);
+  const selectedFile = page.files.find((file) => file.id === selectedFileId) ?? page.files[0];
+  const setPage = useFileLibraryStore((state) => state.setLibraryPage);
+  const setSelectedFileId = useFileLibraryStore((state) => state.setSelectedFileId);
+  const loadStats = useFileLibraryStore((state) => state.loadStats);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -34,7 +38,7 @@ export function VaultView() {
     setIsLoading(true);
     setError("");
     try {
-      const next = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, searchQuery);
+      const next = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, debouncedSearchQuery);
       if (requestId !== requestIdRef.current) return;
       setPage((current) => append
         ? { ...next, files: [...current.files, ...next.files], offset: current.offset }
@@ -47,7 +51,7 @@ export function VaultView() {
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [loadStats, searchQuery, setPage, setSelectedFileId]);
+  }, [debouncedSearchQuery, loadStats, setPage, setSelectedFileId]);
 
   useEffect(() => {
     void loadPage(0, false);

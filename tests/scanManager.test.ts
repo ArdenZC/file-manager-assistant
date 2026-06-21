@@ -1,24 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
-import { createScanProgressOptions } from "../src/hooks/useScanManager";
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 describe("scan manager progress callbacks", () => {
-  it("does not refresh full stats from scan batches and refreshes once on completion", async () => {
-    const onRefreshData = vi.fn(async () => {});
+  it("refreshes file data only from scan-complete and not scan-progress", () => {
+    const storeSource = readFileSync(
+      resolve("src/store/useScanManagerStore.ts"),
+      "utf8"
+    );
+    const progressHandler = storeSource.slice(
+      storeSource.indexOf("tauriApi.onScanProgress"),
+      storeSource.indexOf("tauriApi.onScanBatch")
+    );
+    const completeHandler = storeSource.slice(
+      storeSource.indexOf("tauriApi.onScanComplete"),
+      storeSource.indexOf("tauriApi.onScanError")
+    );
 
-    const options = createScanProgressOptions(onRefreshData);
-
-    expect(options.onBatch).toBeUndefined();
-    options.onComplete?.({
-      root: "/test/root",
-      scanned: 10,
-      files: 8,
-      directories: 2,
-      skipped: 1,
-      errors: 0,
-      elapsedMs: 250
-    });
-    await Promise.resolve();
-
-    expect(onRefreshData).toHaveBeenCalledOnce();
+    expect(progressHandler).not.toContain("useFileLibraryStore.getState().refresh");
+    expect(completeHandler).toContain("useFileLibraryStore.getState().refresh");
   });
 });

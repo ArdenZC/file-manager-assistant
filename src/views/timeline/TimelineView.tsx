@@ -3,7 +3,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
 import { Folder, Play, X } from "lucide-react";
 import type { OperationProgressPayload } from "../../api/tauriApi";
-import { useChromeContext, useOperationQueueContext } from "../../contexts/AppContexts";
+import { useChromeContext } from "../../contexts/AppContexts";
+import { useOperationQueueStore } from "../../store/useOperationQueueStore";
 import type { OperationPreview } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { groupOperationPreviews, compactPath } from "../../utils/viewHelpers";
@@ -16,16 +17,14 @@ const PREVIEW_ROW_HEIGHT = 156;
 
 export function TimelineView() {
   const { t } = useChromeContext();
-  const {
-    displayPreviews: previews,
-    selectedOperationIds: selectedIds,
-    setSelectedOperationIds: setSelectedIds,
-    onRenamePreview,
-    executeSelected,
-    operationProgress,
-    isOperationCanceling,
-    cancelOperations
-  } = useOperationQueueContext();
+  const previews = useOperationQueueStore((state) => state.displayPreviews);
+  const selectedIds = useOperationQueueStore((state) => state.selectedOperationIds);
+  const setSelectedIds = useOperationQueueStore((state) => state.setSelectedOperationIds);
+  const onRenamePreview = useOperationQueueStore((state) => state.onRenamePreview);
+  const executeSelected = useOperationQueueStore((state) => state.executeSelected);
+  const operationProgress = useOperationQueueStore((state) => state.operationProgress);
+  const isOperationCanceling = useOperationQueueStore((state) => state.isOperationCanceling);
+  const cancelOperations = useOperationQueueStore((state) => state.cancelOperations);
   function toggle(id: string) {
     const preview = previews.find((item) => item.id === id);
     if (!preview || preview.is_executable === false) return;

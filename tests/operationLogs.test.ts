@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OperationLog } from "../src/types/domain";
-import { MAX_LOGS, mergeOperationLogs } from "../src/hooks/useOperationQueue";
+import { MAX_LOGS, mergeOperationLogs } from "../src/store/useOperationQueueStore";
 
 describe("mergeOperationLogs", () => {
   it("keeps current session logs before persisted logs", () => {

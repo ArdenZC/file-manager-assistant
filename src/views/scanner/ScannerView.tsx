@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
 import { FolderSearch, RefreshCw, X } from "lucide-react";
-import { useChromeContext, useFileLibraryContext, useScanContext } from "../../contexts/AppContexts";
+import { useChromeContext } from "../../contexts/AppContexts";
+import { useFileLibraryStore } from "../../store/useFileLibraryStore";
+import { useScanManagerStore } from "../../store/useScanManagerStore";
 import { formatBytes, percent } from "../../utils/format";
 import { compactPath, splitDisplaySize } from "../../utils/viewHelpers";
 import { cn, glassButton, glassButtonPrimary } from "../../utils/tw";
@@ -8,8 +10,14 @@ import { pageSurface, panelSurface, quietText } from "../shared/ui";
 
 export function ScannerView() {
   const { t } = useChromeContext();
-  const { stats, files } = useFileLibraryContext();
-  const { selectedFolders, isScanning, scanState, handleChooseFolders, handleScan, cancelScan } = useScanContext();
+  const stats = useFileLibraryStore((state) => state.stats);
+  const files = useFileLibraryStore((state) => state.libraryPage.files);
+  const selectedFolders = useScanManagerStore((state) => state.selectedFolders);
+  const isScanning = useScanManagerStore((state) => state.isScanning);
+  const scanState = useScanManagerStore((state) => state.scanState);
+  const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
+  const handleScan = useScanManagerStore((state) => state.handleScan);
+  const cancelScan = useScanManagerStore((state) => state.cancelScan);
   const scanProgress = scanState.progress;
   const scopedTotalSize = files.reduce((sum, file) => sum + file.size, 0);
   const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, scopedTotalSize / stats.diskTotalSize) : 0;

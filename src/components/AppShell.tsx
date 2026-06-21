@@ -17,13 +17,12 @@ import {
 import { CommandModal } from "./CommandModal";
 import { ViewErrorBoundary } from "./ErrorBoundary";
 import { AmbientMesh, CloseChoiceDialog, TitlebarTools, ZenMark } from "./ShellChrome";
-import {
-  useChromeContext,
-  useFileLibraryContext,
-  useOperationQueueContext,
-  useScanContext
-} from "../contexts/AppContexts";
+import { useChromeContext } from "../contexts/AppContexts";
 import { hideToBackground } from "../hooks/useWindowBehavior";
+import { useAppStore } from "../store/useAppStore";
+import { useFileLibraryStore } from "../store/useFileLibraryStore";
+import { useOperationQueueStore } from "../store/useOperationQueueStore";
+import { useScanManagerStore } from "../store/useScanManagerStore";
 import type { Translator, View } from "../types/ui";
 import { formatDate } from "../utils/format";
 import { cn, glassButton, glassButtonPrimary, statusToast, toastTone } from "../utils/tw";
@@ -63,14 +62,13 @@ export function AppShell() {
     setIsCommandOpen,
     hotkeyLabel,
     view,
-    toast,
     isCommandOpen,
     isCloseChoiceOpen,
     onCancelCloseChoice,
     resolveCloseChoice,
     t
   } = useChromeContext();
-  const { stats } = useFileLibraryContext();
+  const stats = useFileLibraryStore((state) => state.stats);
 
   if (isSearchMode) return <SearchWindow />;
 
@@ -106,11 +104,7 @@ export function AppShell() {
         <Sidebar nav={nav} />
         <main className={workspaceClass}>
           <ViewHeading activeLabel={activeLabel} headingDescription={headingDescription} />
-          {toast && (
-            <div className={cn(statusToast, toastTone(toast.type))}>
-              {toast.message}
-            </div>
-          )}
+          <ToastContainer />
           <div className={viewStageClass}>
             <ViewErrorBoundary key={view}>
               <AppViewContent />
@@ -136,7 +130,7 @@ function SearchWindow() {
 
 function CommandLauncher({ standalone = false }: { standalone?: boolean }) {
   const { commandInputRef, setView, setIsCommandOpen, platform, onError, t } = useChromeContext();
-  const { setSelectedFileId } = useFileLibraryContext();
+  const setSelectedFileId = useFileLibraryStore((state) => state.setSelectedFileId);
 
   function closeCommand() {
     setIsCommandOpen(false);
@@ -206,7 +200,7 @@ function WindowsControls() {
 
 function Sidebar({ nav }: { nav: ReturnType<typeof navItems> }) {
   const { view, setView, t } = useChromeContext();
-  const { previewActionCount } = useOperationQueueContext();
+  const previewActionCount = useOperationQueueStore((state) => state.previewActionCount);
 
   return (
     <aside className={sidebarClass}>
@@ -253,7 +247,9 @@ function ViewHeading({
   headingDescription: string;
 }) {
   const { view, t } = useChromeContext();
-  const { isScanning, handleChooseFolders, handleScan } = useScanContext();
+  const isScanning = useScanManagerStore((state) => state.isScanning);
+  const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
+  const handleScan = useScanManagerStore((state) => state.handleScan);
 
   return (
     <div className="mb-4 flex items-center justify-between gap-4">
@@ -273,6 +269,18 @@ function ViewHeading({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function ToastContainer() {
+  const toast = useAppStore((state) => state.toast);
+
+  if (!toast) return null;
+
+  return (
+    <div className={cn(statusToast, toastTone(toast.type))}>
+      {toast.message}
     </div>
   );
 }
