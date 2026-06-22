@@ -11,7 +11,9 @@ use std::{
 use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use zen_canvas_tauri::{
-    open_database, settings, OperationCancellationToken, ScanCancellationToken,
+    open_database, settings,
+    watcher::{reload_file_watcher_for_settings, FileWatcherManager},
+    OperationCancellationToken, ScanCancellationToken,
 };
 
 fn main() {
@@ -27,6 +29,7 @@ fn main() {
             app.manage(db.clone());
             app.manage(ScanCancellationToken(Arc::new(AtomicBool::new(false))));
             app.manage(OperationCancellationToken(Arc::new(AtomicBool::new(false))));
+            app.manage(FileWatcherManager::default());
             zen_canvas_tauri::app_control::setup_tray(app)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             zen_canvas_tauri::app_control::setup_search_window(app)
@@ -49,20 +52,13 @@ fn main() {
             };
             db.prune_operation_logs(app_settings.restore_retention_days)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
-            // 构建默认监听路径：设置中启用的绝对扫描根目录
-            let watch_paths: Vec<std::path::PathBuf> =
-                zen_canvas_tauri::watcher::watch_paths_from_default_scan_folders(
-                    &app_settings.default_scan_folders,
-                )
-                .into_iter()
-                .filter(|p| p.exists())
-                .collect();
-            if !watch_paths.is_empty() {
-                if let Err(e) =
-                    zen_canvas_tauri::watcher::setup_file_watcher(app.handle().clone(), watch_paths)
-                {
-                    eprintln!("File watcher init failed (non-fatal): {e}");
-                }
+            let watcher_manager = app.state::<FileWatcherManager>();
+            if let Err(error) = reload_file_watcher_for_settings(
+                app.handle().clone(),
+                &watcher_manager,
+                &app_settings,
+            ) {
+                eprintln!("File watcher init failed (non-fatal): {error}");
             }
             Ok(())
         })

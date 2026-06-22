@@ -1,4 +1,7 @@
-use crate::db::{Database, DbError};
+use crate::{
+    db::{Database, DbError},
+    watcher::{emit_file_watcher_error, reload_file_watcher_for_settings, FileWatcherManager},
+};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -332,9 +335,17 @@ pub fn get_settings(db: State<'_, Database>) -> Result<AppSettings, String> {
 pub fn save_settings<R: Runtime>(
     app: AppHandle<R>,
     db: State<'_, Database>,
+    watcher_manager: State<'_, FileWatcherManager>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
     let launch_at_login = app.autolaunch();
-    save_app_settings_with_launch_at_login(&db, &settings, &*launch_at_login)
-        .map_err(|error| error.to_string())
+    let saved = save_app_settings_with_launch_at_login(&db, &settings, &*launch_at_login)
+        .map_err(|error| error.to_string())?;
+
+    if let Err(error) = reload_file_watcher_for_settings(app.clone(), &watcher_manager, &saved) {
+        emit_file_watcher_error(&app, error.clone());
+        eprintln!("File watcher reload failed after settings save (non-fatal): {error}");
+    }
+
+    Ok(saved)
 }

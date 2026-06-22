@@ -1,4 +1,7 @@
-use crate::{path_filter::is_ignored_dir_name, settings::ScanRootSetting};
+use crate::{
+    path_filter::is_ignored_dir_name,
+    settings::{AppSettings, ScanRootSetting},
+};
 use notify::{
     event::ModifyKind, recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode,
     Watcher,
@@ -6,9 +9,12 @@ use notify::{
 use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver},
-    thread,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        mpsc::{self, Receiver, RecvTimeoutError},
+        Mutex,
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Runtime};
 use thiserror::Error;
@@ -31,6 +37,8 @@ enum WatcherError {
     Tauri(#[from] tauri::Error),
     #[error("failed to start watcher thread: {0}")]
     Thread(std::io::Error),
+    #[error("watcher state lock poisoned")]
+    StateLock,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,11 +62,115 @@ pub struct WatcherErrorEvent {
     pub message: String,
 }
 
+#[derive(Default)]
+pub struct FileWatcherManager {
+    session: Mutex<Option<WatcherSession>>,
+}
+
+struct WatcherSession {
+    roots: Vec<PathBuf>,
+    shutdown: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl WatcherSession {
+    fn new(roots: Vec<PathBuf>, shutdown: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            roots,
+            shutdown: Some(Box::new(shutdown)),
+        }
+    }
+
+    fn detach(mut self) {
+        self.shutdown.take();
+    }
+}
+
+impl Drop for WatcherSession {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            shutdown();
+        }
+    }
+}
+
+impl FileWatcherManager {
+    fn restart<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        paths: Vec<PathBuf>,
+    ) -> Result<bool, WatcherError> {
+        let roots = normalize_watch_roots(paths)?;
+        if roots.is_empty() {
+            let changed = self.restart_with_roots(Vec::new(), |_| unreachable!())?;
+            if changed {
+                emit_watcher_ready(&app, Vec::new())?;
+            }
+            return Ok(changed);
+        }
+
+        self.restart_with_roots(roots, |roots| start_watcher_session(app, roots))
+    }
+
+    fn restart_with_roots(
+        &self,
+        roots: Vec<PathBuf>,
+        start: impl FnOnce(Vec<PathBuf>) -> Result<WatcherSession, WatcherError>,
+    ) -> Result<bool, WatcherError> {
+        let mut session = self.session.lock().map_err(|_| WatcherError::StateLock)?;
+        if session
+            .as_ref()
+            .is_some_and(|current| current.roots == roots)
+        {
+            return Ok(false);
+        }
+
+        if roots.is_empty() {
+            *session = None;
+            return Ok(true);
+        }
+
+        let next = start(roots)?;
+        *session = Some(next);
+        Ok(true)
+    }
+
+    pub fn active_roots(&self) -> Result<Vec<PathBuf>, String> {
+        self.session
+            .lock()
+            .map(|session| {
+                session
+                    .as_ref()
+                    .map(|session| session.roots.clone())
+                    .unwrap_or_default()
+            })
+            .map_err(|_| WatcherError::StateLock.to_string())
+    }
+}
+
 pub fn setup_file_watcher<R: Runtime>(
     app: AppHandle<R>,
     paths: Vec<PathBuf>,
 ) -> Result<(), String> {
     setup_file_watcher_inner(app, paths).map_err(|error| error.to_string())
+}
+
+pub fn reload_file_watcher_for_settings<R: Runtime>(
+    app: AppHandle<R>,
+    manager: &FileWatcherManager,
+    settings: &AppSettings,
+) -> Result<bool, String> {
+    let paths = existing_watch_paths_from_default_scan_folders(&settings.default_scan_folders);
+    reload_file_watcher(app, manager, paths)
+}
+
+pub fn reload_file_watcher<R: Runtime>(
+    app: AppHandle<R>,
+    manager: &FileWatcherManager,
+    paths: Vec<PathBuf>,
+) -> Result<bool, String> {
+    manager
+        .restart(app, paths)
+        .map_err(|error| error.to_string())
 }
 
 pub fn watch_paths_from_default_scan_folders(folders: &[ScanRootSetting]) -> Vec<PathBuf> {
@@ -71,16 +183,41 @@ pub fn watch_paths_from_default_scan_folders(folders: &[ScanRootSetting]) -> Vec
         .collect()
 }
 
+pub fn existing_watch_paths_from_default_scan_folders(folders: &[ScanRootSetting]) -> Vec<PathBuf> {
+    watch_paths_from_default_scan_folders(folders)
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect()
+}
+
+pub fn emit_file_watcher_error<R: Runtime>(app: &AppHandle<R>, message: String) {
+    let _ = app.emit(WATCHER_ERROR_EVENT_NAME, WatcherErrorEvent { message });
+}
+
 fn setup_file_watcher_inner<R: Runtime>(
     app: AppHandle<R>,
     paths: Vec<PathBuf>,
 ) -> Result<(), WatcherError> {
     let roots = normalize_watch_roots(paths)?;
+    if roots.is_empty() {
+        emit_watcher_ready(&app, Vec::new())?;
+        return Ok(());
+    }
+    let session = start_watcher_session(app, roots)?;
+    session.detach();
+    Ok(())
+}
+
+fn start_watcher_session<R: Runtime>(
+    app: AppHandle<R>,
+    roots: Vec<PathBuf>,
+) -> Result<WatcherSession, WatcherError> {
     let root_labels = roots
         .iter()
         .map(|path| normalize_path(path))
         .collect::<Vec<_>>();
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let mut watcher = recommended_watcher(move |event| {
         let _ = tx.send(event);
@@ -90,19 +227,34 @@ fn setup_file_watcher_inner<R: Runtime>(
         watcher.watch(root, RecursiveMode::Recursive)?;
     }
 
+    emit_watcher_ready(&app, root_labels)?;
+
+    let handle = thread::Builder::new()
+        .name("zen-canvas-file-watcher".to_string())
+        .spawn(move || run_watcher_loop(app, watcher, rx, stop_rx))
+        .map_err(WatcherError::Thread)?;
+
+    Ok(WatcherSession::new(roots, move || {
+        stop_watcher(stop_tx, handle)
+    }))
+}
+
+fn stop_watcher(stop_tx: mpsc::Sender<()>, handle: JoinHandle<()>) {
+    let _ = stop_tx.send(());
+    let _ = handle.join();
+}
+
+fn emit_watcher_ready<R: Runtime>(
+    app: &AppHandle<R>,
+    roots: Vec<String>,
+) -> Result<(), WatcherError> {
     app.emit(
         WATCHER_READY_EVENT_NAME,
         WatcherReadyEvent {
-            roots: root_labels,
+            roots,
             recursive: true,
         },
     )?;
-
-    thread::Builder::new()
-        .name("zen-canvas-file-watcher".to_string())
-        .spawn(move || run_watcher_loop(app, watcher, rx))
-        .map_err(WatcherError::Thread)?;
-
     Ok(())
 }
 
@@ -110,22 +262,24 @@ fn run_watcher_loop(
     app: AppHandle<impl Runtime>,
     _watcher: RecommendedWatcher,
     rx: Receiver<notify::Result<Event>>,
+    stop_rx: Receiver<()>,
 ) {
-    for event in rx {
-        match event {
-            Ok(event) => {
-                if let Some(payload) = event_to_payload(event) {
-                    let _ = app.emit(FILE_EVENT_NAME, payload);
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(event) => match event {
+                Ok(event) => {
+                    if let Some(payload) = event_to_payload(event) {
+                        let _ = app.emit(FILE_EVENT_NAME, payload);
+                    }
                 }
-            }
-            Err(error) => {
-                let _ = app.emit(
-                    WATCHER_ERROR_EVENT_NAME,
-                    WatcherErrorEvent {
-                        message: error.to_string(),
-                    },
-                );
-            }
+                Err(error) => emit_file_watcher_error(&app, error.to_string()),
+            },
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 }
@@ -158,6 +312,10 @@ mod tests {
     use super::*;
     use crate::settings::ScanRootSetting;
     use notify::event::{AccessKind, EventAttributes};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     #[test]
     fn watch_paths_follow_enabled_absolute_scan_root_settings() {
@@ -192,6 +350,46 @@ mod tests {
     }
 
     #[test]
+    fn file_watcher_manager_restarts_when_roots_change() {
+        let manager = FileWatcherManager::default();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+
+        restart_test_session(&manager, "/tmp/root-a", &starts, &shutdowns);
+        manager
+            .restart_with_roots(vec![PathBuf::from("/tmp/root-a")], |_| {
+                panic!("unchanged roots should not restart")
+            })
+            .expect("same roots");
+        restart_test_session(&manager, "/tmp/root-b", &starts, &shutdowns);
+
+        assert_eq!(starts.load(Ordering::SeqCst), 2);
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+
+        drop(manager);
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn file_watcher_manager_stops_when_roots_become_empty() {
+        let manager = FileWatcherManager::default();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+
+        restart_test_session(&manager, "/tmp/root-a", &starts, &shutdowns);
+        manager
+            .restart_with_roots(Vec::new(), |_| panic!("empty roots should not start"))
+            .expect("empty roots");
+
+        assert_eq!(
+            manager.active_roots().expect("active roots"),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn event_to_payload_ignores_access_events() {
         let event = Event {
             kind: EventKind::Access(AccessKind::Read),
@@ -210,6 +408,24 @@ mod tests {
             enabled,
             created_at: "2026-06-22T00:00:00.000Z".to_string(),
         }
+    }
+
+    fn restart_test_session(
+        manager: &FileWatcherManager,
+        root: &str,
+        starts: &Arc<AtomicUsize>,
+        shutdowns: &Arc<AtomicUsize>,
+    ) {
+        let starts = Arc::clone(starts);
+        let shutdowns = Arc::clone(shutdowns);
+        manager
+            .restart_with_roots(vec![PathBuf::from(root)], move |roots| {
+                starts.fetch_add(1, Ordering::SeqCst);
+                Ok(WatcherSession::new(roots, move || {
+                    shutdowns.fetch_add(1, Ordering::SeqCst);
+                }))
+            })
+            .expect("restart test session");
     }
 }
 

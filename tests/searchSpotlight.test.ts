@@ -79,6 +79,8 @@ describe("spotlight search navigation", () => {
 
   it("configures the global search window as a transparent spotlight surface", () => {
     const appControl = readFileSync(resolve("src-tauri/src/app_control.rs"), "utf8");
+    const cargoToml = readFileSync(resolve("src-tauri/Cargo.toml"), "utf8");
+    const tauriConfig = readFileSync(resolve("src-tauri/tauri.conf.json"), "utf8");
     const appShell = readFileSync(resolve("src/components/AppShell.tsx"), "utf8");
     const main = readFileSync(resolve("src/main.tsx"), "utf8");
     const styles = readFileSync(resolve("src/styles.css"), "utf8");
@@ -89,6 +91,9 @@ describe("spotlight search navigation", () => {
     );
 
     expect(setupSearchWindow).toContain(".transparent(true)");
+    expect(setupSearchWindow).not.toContain("target_os = \"windows\", target_os = \"linux\"");
+    expect(cargoToml).toContain("\"tauri/macos-private-api\"");
+    expect(tauriConfig).toContain("\"macOSPrivateApi\": true");
     expect(setupSearchWindow).toContain(".decorations(false)");
     expect(setupSearchWindow).toContain(".resizable(false)");
     expect(setupSearchWindow).toContain(".skip_taskbar(true)");

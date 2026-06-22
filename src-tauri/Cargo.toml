@@ -1,6 +1,6 @@
 [package]
 name = "zen-canvas-tauri"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 
 [lib]
@@ -18,6 +18,7 @@ desktop-runtime = [
     "tauri/wry",
     "tauri/compression",
     "tauri/common-controls-v6",
+    "tauri/macos-private-api",
     "tauri/tray-icon",
     "tauri/image-png",
 ]
@@ -34,7 +35,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 sysinfo = "0.32"
-tauri = { version = "2", default-features = false, features = [] }
+tauri = { version = "2", default-features = false, features = ["macos-private-api"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-global-shortcut = "2"
