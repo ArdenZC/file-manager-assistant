@@ -108,6 +108,7 @@ pub fn setup_search_window(app: &mut App) -> tauri::Result<()> {
     .title("Zen Canvas Search")
     .inner_size(SEARCH_WINDOW_WIDTH, SEARCH_WINDOW_HEIGHT)
     .decorations(false)
+    .transparent(true)
     .resizable(false)
     .skip_taskbar(true)
     .always_on_top(true)

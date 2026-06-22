@@ -1,4 +1,7 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use std::{
     io,
@@ -46,11 +49,9 @@ fn main() {
             };
             db.prune_operation_logs(app_settings.restore_retention_days)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
-            // 构建默认监听路径：用户主目录下设置启用的个人文件夹
-            let home = dirs::home_dir();
+            // 构建默认监听路径：设置中启用的绝对扫描根目录
             let watch_paths: Vec<std::path::PathBuf> =
                 zen_canvas_tauri::watcher::watch_paths_from_default_scan_folders(
-                    home.as_deref(),
                     &app_settings.default_scan_folders,
                 )
                 .into_iter()
@@ -79,6 +80,7 @@ fn main() {
             zen_canvas_tauri::db::delete_user_rule,
             zen_canvas_tauri::db::execute_rules_on_inbox,
             zen_canvas_tauri::db::execute_rules_for_paths,
+            zen_canvas_tauri::db::execute_rules_for_scope,
             zen_canvas_tauri::settings::get_settings,
             zen_canvas_tauri::settings::save_settings,
             zen_canvas_tauri::app_control::quit_app,

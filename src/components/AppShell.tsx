@@ -40,7 +40,7 @@ import {
 const appRoot =
   "relative h-screen min-h-[720px] min-w-[1080px] overflow-hidden bg-[var(--bg)] text-[var(--ink)]";
 const searchWindowRoot =
-  "relative h-screen w-screen overflow-hidden bg-[var(--bg)] text-[var(--ink)]";
+  "relative h-screen w-screen overflow-hidden bg-transparent text-[var(--ink)]";
 const titlebar =
   "relative z-30 grid h-12 grid-cols-[260px_1fr_260px] items-center border-b border-[var(--line-dark)] bg-[var(--surface-soft)] px-4 backdrop-blur-2xl [-webkit-app-region:drag]";
 const noDrag = "[-webkit-app-region:no-drag]";

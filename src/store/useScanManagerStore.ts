@@ -8,8 +8,10 @@ import {
   type ScanSummary,
   type ScannedEntry
 } from "../api/tauriApi";
+import { enabledScanRootPaths } from "../hooks/useAppSettings";
 import { makeTranslator } from "../i18n";
 import type { ScanStatus } from "../hooks/useScanProgress";
+import type { ScanRootSetting } from "../types/domain";
 import { readableError } from "../utils/viewHelpers";
 import { useAppStore } from "./useAppStore";
 import { useFileLibraryStore } from "./useFileLibraryStore";
@@ -30,13 +32,16 @@ const initialScanState: ScanStateData = {
 
 export interface ScanManagerStore {
   selectedFolders: string[];
+  defaultScanRoots: ScanRootSetting[];
   isScanning: boolean;
   scanState: ScanStateData;
   listenersRegistered: boolean;
   unlisteners: UnlistenFn[];
   initializeScanListeners: () => Promise<void>;
+  setDefaultScanRoots: (roots: ScanRootSetting[]) => void;
   reset: () => void;
   scanPath: (path: string) => Promise<void>;
+  scanPaths: (paths: string[]) => Promise<void>;
   handleScan: () => Promise<void>;
   handleChooseFolders: () => Promise<void>;
   cancelScan: () => Promise<void>;
@@ -61,6 +66,7 @@ async function askForScanPath() {
 
 export const useScanManagerStore = create<ScanManagerStore>((set, get) => ({
   selectedFolders: [],
+  defaultScanRoots: [],
   isScanning: false,
   scanState: initialScanState,
   listenersRegistered: false,
@@ -92,6 +98,7 @@ export const useScanManagerStore = create<ScanManagerStore>((set, get) => ({
           }));
         }),
         tauriApi.onScanComplete((summary: ScanSummary) => {
+          useFileLibraryStore.getState().setCurrentScanScope([summary.root]);
           set((state) => ({
             scanState: {
               ...state.scanState,
@@ -124,23 +131,34 @@ export const useScanManagerStore = create<ScanManagerStore>((set, get) => ({
       useAppStore.getState().showError(readableError(error));
     }
   },
+  setDefaultScanRoots: (roots) => set({ defaultScanRoots: roots }),
   reset: () => set({ scanState: initialScanState }),
   scanPath: async (path) => {
+    await get().scanPaths([path]);
+  },
+  scanPaths: async (paths) => {
     const t = currentT();
-    if (!path) {
+    const scanRoots = paths.map((path) => path.trim()).filter(Boolean);
+    if (!scanRoots.length) {
       useAppStore.getState().showError(t("noFolderSelected"));
       return;
     }
 
     set({
-      selectedFolders: [path],
+      selectedFolders: scanRoots,
       isScanning: true,
       scanState: initialScanState
     });
 
     try {
-      const summary = await tauriApi.startScan(path, false);
-      useAppStore.getState().showSuccess(`${t("success")}: ${summary.files.toLocaleString()} ${t("files")}`);
+      let totalFiles = 0;
+      for (const path of scanRoots) {
+        const summary = await tauriApi.startScan(path, false);
+        totalFiles += summary.files;
+      }
+      useFileLibraryStore.getState().setCurrentScanScope(scanRoots);
+      await useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery);
+      useAppStore.getState().showSuccess(`${t("success")}: ${totalFiles.toLocaleString()} ${t("files")}`);
     } catch (error) {
       useAppStore.getState().showError(readableError(error));
     } finally {
@@ -149,12 +167,10 @@ export const useScanManagerStore = create<ScanManagerStore>((set, get) => ({
   },
   handleScan: async () => {
     try {
-      const { selectedFolders, scanPath } = get();
-      const requestedPath = selectedFolders.length > 0 ? "" : await askForScanPath();
-      const paths = selectedFolders.length > 0 ? selectedFolders : [requestedPath].filter(Boolean);
-      for (const path of paths) {
-        if (path) await scanPath(path);
-      }
+      const { defaultScanRoots, scanPaths } = get();
+      const defaultPaths = enabledScanRootPaths(defaultScanRoots);
+      const paths = defaultPaths.length ? defaultPaths : [await askForScanPath()].filter(Boolean);
+      await scanPaths(paths);
     } catch (error) {
       useAppStore.getState().showError(readableError(error));
     }

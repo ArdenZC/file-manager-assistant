@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
-import { Plus, Search } from "lucide-react";
+import { FolderSearch, Layers, Plus, Search } from "lucide-react";
 import { tauriApi } from "../../api/tauriApi";
 import { useChromeContext } from "../../contexts/AppContexts";
 import { useDebounce } from "../../hooks/useDebounce";
 import { useAppStore } from "../../store/useAppStore";
 import { LIBRARY_PAGE_SIZE, useFileLibraryStore } from "../../store/useFileLibraryStore";
+import { useScanManagerStore } from "../../store/useScanManagerStore";
 import type { FileRecord } from "../../types/domain";
 import type { Translator } from "../../types/ui";
+import { libraryScopeLabel } from "../../utils/viewHelpers";
 import { shouldVirtualizeList } from "../../utils/virtualization";
 import { cn, glassButton, inputSurface, statusToast, virtualList, virtualSpacer } from "../../utils/tw";
 import { listMotion, mutedText, pageSurface, segmentButton } from "../shared/ui";
@@ -22,11 +24,14 @@ export function VaultView() {
   const setSearchQuery = useAppStore((state) => state.setSearchQuery);
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const page = useFileLibraryStore((state) => state.libraryPage);
+  const scope = useFileLibraryStore((state) => state.scope);
   const selectedFileId = useFileLibraryStore((state) => state.selectedFileId);
   const selectedFile = page.files.find((file) => file.id === selectedFileId) ?? page.files[0];
+  const setScope = useFileLibraryStore((state) => state.setScope);
   const setPage = useFileLibraryStore((state) => state.setLibraryPage);
   const setSelectedFileId = useFileLibraryStore((state) => state.setSelectedFileId);
   const loadStats = useFileLibraryStore((state) => state.loadStats);
+  const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -38,20 +43,20 @@ export function VaultView() {
     setIsLoading(true);
     setError("");
     try {
-      const next = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, debouncedSearchQuery);
+      const next = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, debouncedSearchQuery, scope);
       if (requestId !== requestIdRef.current) return;
       setPage((current) => append
         ? { ...next, files: [...current.files, ...next.files], offset: current.offset }
         : next
       );
       if (!append && next.files[0]) setSelectedFileId(next.files[0].id);
-      await loadStats();
+      await loadStats(scope);
     } catch (caught) {
       if (requestId === requestIdRef.current) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [debouncedSearchQuery, loadStats, setPage, setSelectedFileId]);
+  }, [debouncedSearchQuery, loadStats, scope, setPage, setSelectedFileId]);
 
   useEffect(() => {
     void loadPage(0, false);
@@ -75,9 +80,26 @@ export function VaultView() {
     { key: "archive", label: t("libraryArchiveFiles"), description: t("libraryArchiveFilesDesc") },
     { key: "review", label: t("libraryReviewFiles"), description: t("libraryReviewFilesDesc") }
   ];
+  const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
+  const scopedSearchPlaceholder = scope.kind === "all" ? t("librarySearchPlaceholder") : t("librarySearchPlaceholderScoped");
 
   return (
     <div className={cn(pageSurface, "space-y-4")}>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] bg-white/25 px-3 py-2 text-sm dark:bg-white/5">
+        <span className="min-w-0 text-[var(--muted)]">
+          {t("currentScope")}: <strong className="text-[var(--ink)]">{scopeText}</strong>
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className={glassButton} onClick={() => setScope({ kind: "all" })} disabled={scope.kind === "all"}>
+            <Layers size={16} />
+            <span>{t("viewAllIndexedFiles")}</span>
+          </button>
+          <button className={glassButton} onClick={() => void handleChooseFolders()}>
+            <FolderSearch size={16} />
+            <span>{t("switchScanDirectory")}</span>
+          </button>
+        </div>
+      </div>
       <div className="flex flex-wrap gap-2">
         {filters.map((filter) => (
           <button
@@ -109,7 +131,7 @@ export function VaultView() {
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder={t("librarySearchPlaceholder")}
+          placeholder={scopedSearchPlaceholder}
           className="min-w-0 flex-1 bg-transparent outline-none"
         />
       </label>

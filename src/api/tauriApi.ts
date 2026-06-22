@@ -7,6 +7,7 @@ import type {
   ExecuteOperationResult,
   FileQueryResult,
   FileRecord,
+  LibraryScope,
   OperationLog,
   OperationPreview,
   RestoreMovesResult,
@@ -82,21 +83,22 @@ function listenTo<T>(eventName: string, handler: EventHandler<T>): Promise<Unlis
 }
 
 export const tauriApi = {
-  getPagedFiles(limit = 50, offset = 0, query?: string): Promise<FileQueryResult> {
+  getPagedFiles(limit = 50, offset = 0, query?: string, scope?: LibraryScope): Promise<FileQueryResult> {
     const normalizedQuery = query?.trim();
     return invokeCommand<FileQueryResult>("get_paged_files", {
       limit,
       offset,
-      query: normalizedQuery ? normalizedQuery : null
+      query: normalizedQuery ? normalizedQuery : null,
+      scope: scope ?? null
     });
   },
 
-  getStatsSummary(): Promise<DashboardStats> {
-    return invokeCommand<DashboardStats>("get_stats_summary");
+  getStatsSummary(scope?: LibraryScope): Promise<DashboardStats> {
+    return invokeCommand<DashboardStats>("get_stats_summary", { scope: scope ?? null });
   },
 
-  searchFiles(query: string, limit = 12): Promise<TauriSearchFileResult[]> {
-    return invokeCommand<TauriSearchFileResult[]>("search_files", { query, limit });
+  searchFiles(query: string, limit = 12, scope?: LibraryScope): Promise<FileRecord[]> {
+    return invokeCommand<FileRecord[]>("search_files", { query, limit, scope: scope ?? null });
   },
 
   startScan(path: string, includeEntries = false): Promise<ScanSummary> {
@@ -134,6 +136,10 @@ export const tauriApi = {
 
   executeRulesForPaths(paths: string[], rules: Rule[]): Promise<RuleExecutionSummary> {
     return invokeCommand<RuleExecutionSummary>("execute_rules_for_paths", { paths, rules });
+  },
+
+  executeRulesForScope(scope: LibraryScope, rules: Rule[]): Promise<RuleExecutionSummary> {
+    return invokeCommand<RuleExecutionSummary>("execute_rules_for_scope", { scope, rules });
   },
 
   getUserRules(): Promise<Rule[]> {

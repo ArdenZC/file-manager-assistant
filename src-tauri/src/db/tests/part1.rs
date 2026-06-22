@@ -49,6 +49,57 @@
     }
 
     #[test]
+    fn folder_naming_language_change_rebuilds_existing_media_suggestion_path() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let mut settings = AppSettings::default();
+        settings.folder_naming_language = "en".to_string();
+        save_app_settings(&db, &settings).expect("save english settings");
+        insert_test_file(
+            &db,
+            "file-photo-language",
+            "photo_001.jpg",
+            "jpg",
+            2_048,
+            1_900_000_000,
+        );
+
+        db.execute_rules_on_inbox(Vec::new())
+            .expect("execute english rules");
+        let english_path = db
+            .get_paged_files(Some(10), Some(0), None)
+            .expect("english page")
+            .files
+            .into_iter()
+            .find(|file| file.id == "file-photo-language")
+            .expect("english file")
+            .suggested_target_path
+            .replace('\\', "/");
+
+        settings.folder_naming_language = "zh".to_string();
+        save_app_settings(&db, &settings).expect("save chinese settings");
+        set_file_lifecycle(&db, "/test/virtual/documents/photo_001.jpg", "Inbox");
+        let summary = db.execute_rules_for_paths(
+            &["/test/virtual/documents/photo_001.jpg".to_string()],
+            Vec::new(),
+        )
+        .expect("execute chinese rules");
+        let chinese_path = db
+            .get_paged_files(Some(10), Some(0), None)
+            .expect("chinese page")
+            .files
+            .into_iter()
+            .find(|file| file.id == "file-photo-language")
+            .expect("chinese file")
+            .suggested_target_path
+            .replace('\\', "/");
+
+        assert!(english_path.contains("20_Areas/Media/Images"));
+        assert_eq!(summary.updated, 1);
+        assert!(chinese_path.contains("20_领域/媒体/图片"));
+        assert_ne!(english_path, chinese_path);
+    }
+
+    #[test]
     fn get_paged_files_returns_limit_and_offset() {
         let db = Database::open(test_db_path()).expect("open test database");
         insert_test_file(&db, "file-1", "report.pdf", "pdf", 2_048, 1_800_000_000);
@@ -64,6 +115,53 @@
     }
 
     #[test]
+    fn get_paged_files_filters_by_library_scope_roots() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-root-a",
+            "/tmp/root-a/a.pdf",
+            "a.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        insert_test_file_at_path(
+            &db,
+            "file-root-b",
+            "/tmp/root-b/b.pdf",
+            "b.pdf",
+            "pdf",
+            4_096,
+            1_900_000_001,
+        );
+
+        let root_a = LibraryScope::Roots {
+            roots: vec!["/tmp/root-a".to_string()],
+        };
+        let root_b = LibraryScope::Roots {
+            roots: vec!["/tmp/root-b".to_string()],
+        };
+        let all = LibraryScope::All;
+
+        let page_a = db
+            .get_paged_files_in_scope(Some(10), Some(0), None, &root_a)
+            .expect("root a page");
+        let page_b = db
+            .get_paged_files_in_scope(Some(10), Some(0), None, &root_b)
+            .expect("root b page");
+        let page_all = db
+            .get_paged_files_in_scope(Some(10), Some(0), None, &all)
+            .expect("all page");
+
+        assert_eq!(page_a.total, 1);
+        assert_eq!(page_a.files[0].name, "a.pdf");
+        assert_eq!(page_b.total, 1);
+        assert_eq!(page_b.files[0].name, "b.pdf");
+        assert_eq!(page_all.total, 2);
+    }
+
+    #[test]
     fn get_stats_summary_aggregates_files_and_types() {
         let db = Database::open(test_db_path()).expect("open test database");
         insert_test_file(&db, "file-1", "report.pdf", "pdf", 2_048, 1_800_000_000);
@@ -76,6 +174,40 @@
         assert_eq!(stats.by_type.get("Document"), Some(&1));
         assert_eq!(stats.by_type.get("Image"), Some(&1));
         assert_eq!(stats.by_lifecycle.get("Inbox"), Some(&2));
+    }
+
+    #[test]
+    fn get_stats_summary_filters_by_library_scope_roots() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-root-a",
+            "/tmp/root-a/a.pdf",
+            "a.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        insert_test_file_at_path(
+            &db,
+            "file-root-b",
+            "/tmp/root-b/b.pdf",
+            "b.pdf",
+            "pdf",
+            4_096,
+            1_900_000_001,
+        );
+
+        let stats = db
+            .get_stats_summary_in_scope(&LibraryScope::Roots {
+                roots: vec!["/tmp/root-a".to_string()],
+            })
+            .expect("root a stats");
+
+        assert_eq!(stats.total_files, 1);
+        assert_eq!(stats.total_size, 2_048);
+        assert_eq!(stats.by_type.get("Document"), Some(&1));
+        assert_eq!(stats.by_lifecycle.get("Inbox"), Some(&1));
     }
 
     #[test]
@@ -219,4 +351,3 @@
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "report.txt");
     }
-

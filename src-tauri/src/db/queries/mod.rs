@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, types::Value as SqlValue, Connection, OptionalExtension, Row};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -38,6 +38,104 @@ fn escape_like_pattern(value: &str) -> String {
         escaped.push(ch);
     }
     escaped
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ScopedFilesSql {
+    pub(crate) cte: String,
+    pub(crate) params: Vec<SqlValue>,
+}
+
+#[derive(Debug, Clone)]
+struct ScopePathSql {
+    clause: String,
+    params: Vec<SqlValue>,
+}
+
+pub(crate) fn scoped_files_sql(scope: Option<&LibraryScope>) -> ScopedFilesSql {
+    let filter = scope_path_filter(scope, "f");
+    let scope_clause = if filter.clause.is_empty() {
+        String::new()
+    } else {
+        format!(" AND ({})", filter.clause)
+    };
+
+    ScopedFilesSql {
+        cte: format!(
+            "scoped_files AS (SELECT f.rowid AS rowid, f.* FROM files AS f WHERE f.is_stale = 0{scope_clause})"
+        ),
+        params: filter.params,
+    }
+}
+
+fn scope_path_filter(scope: Option<&LibraryScope>, alias: &str) -> ScopePathSql {
+    let Some(roots) = scope_roots(scope) else {
+        return ScopePathSql {
+            clause: String::new(),
+            params: Vec::new(),
+        };
+    };
+
+    let root_candidates = normalized_scope_root_candidates(roots);
+    if root_candidates.is_empty() {
+        return ScopePathSql {
+            clause: "1 = 0".to_string(),
+            params: Vec::new(),
+        };
+    }
+
+    let mut clauses = Vec::with_capacity(root_candidates.len());
+    let mut params = Vec::with_capacity(root_candidates.len() * 3);
+    for candidate in root_candidates {
+        let escaped_path = escape_like_pattern(&candidate);
+        clauses.push(format!(
+            "({alias}.path = ? OR {alias}.path LIKE ? ESCAPE '~' OR {alias}.path LIKE ? ESCAPE '~')"
+        ));
+        params.push(SqlValue::Text(candidate));
+        params.push(SqlValue::Text(descendant_like_pattern(&escaped_path, '/')));
+        params.push(SqlValue::Text(descendant_like_pattern(&escaped_path, '\\')));
+    }
+
+    ScopePathSql {
+        clause: clauses.join(" OR "),
+        params,
+    }
+}
+
+fn scope_roots(scope: Option<&LibraryScope>) -> Option<&[String]> {
+    match scope {
+        None | Some(LibraryScope::All) => None,
+        Some(LibraryScope::CurrentScan { roots, .. }) | Some(LibraryScope::Roots { roots }) => {
+            Some(roots.as_slice())
+        }
+    }
+}
+
+fn normalized_scope_root_candidates(roots: &[String]) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for root in roots
+        .iter()
+        .map(|root| root.trim())
+        .filter(|root| !root.is_empty())
+    {
+        let root = trim_trailing_path_separators(root);
+        if root.is_empty() {
+            continue;
+        }
+        let normalized_root = normalize_path_text(root);
+        for candidate in path_lookup_candidates(root, &normalized_root) {
+            push_unique(&mut candidates, candidate);
+        }
+    }
+    candidates
+}
+
+fn descendant_like_pattern(escaped_path: &str, separator: char) -> String {
+    if escaped_path.ends_with('/') || escaped_path.ends_with('\\') {
+        format!("{escaped_path}%")
+    } else {
+        format!("{escaped_path}{separator}%")
+    }
 }
 
 pub(crate) fn build_fts_query(input: &str) -> Option<String> {
@@ -398,9 +496,9 @@ pub(crate) fn infer_file_type(extension: &str, is_dir: bool) -> &'static str {
 
     match extension.to_ascii_lowercase().as_str() {
         "pdf" | "doc" | "docx" | "txt" | "md" | "rtf" => "Document",
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "svg" => "Image",
-        "mp4" | "mov" | "mkv" | "avi" | "webm" => "Video",
-        "mp3" | "wav" | "flac" | "aac" | "m4a" => "Audio",
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "bmp" | "tiff" | "svg" => "Image",
+        "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" => "Video",
+        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" => "Audio",
         "zip" | "rar" | "7z" | "tar" | "gz" => "ArchivePackage",
         "exe" | "msi" | "dmg" | "pkg" | "appimage" => "Installer",
         "xls" | "xlsx" | "csv" | "numbers" => "Spreadsheet",

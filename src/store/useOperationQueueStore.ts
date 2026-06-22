@@ -112,7 +112,10 @@ export const useOperationQueueStore = create<OperationQueueStore>((set, get) => 
   runDispatch: async () => {
     const t = currentT();
     try {
-      const summary = await tauriApi.executeRulesOnInbox(useRulesStore.getState().rules);
+      const summary = await tauriApi.executeRulesForScope(
+        useFileLibraryStore.getState().scope,
+        useRulesStore.getState().rules
+      );
       await useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery);
       useAppStore.getState().showSuccess(
         `${t("success")}: ${summary.updated.toLocaleString()} / ${summary.scanned.toLocaleString()} (${t("skipped")}: ${summary.skipped.toLocaleString()})`

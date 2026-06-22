@@ -218,6 +218,22 @@ pub struct SearchIndexOptimizeReport {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LibraryScope {
+    CurrentScan {
+        #[serde(default)]
+        roots: Vec<String>,
+        #[serde(default, rename = "scanSessionId")]
+        scan_session_id: Option<String>,
+    },
+    Roots {
+        #[serde(default)]
+        roots: Vec<String>,
+    },
+    All,
+}
+
 pub(crate) struct RuleSqlRow {
     pub(crate) id: String,
     pub(crate) name: String,

@@ -20,6 +20,29 @@
         .expect("insert file");
     }
 
+    fn insert_test_file_at_path(
+        db: &Database,
+        id: &str,
+        path: &str,
+        name: &str,
+        extension: &str,
+        size: i64,
+        mtime: i64,
+    ) {
+        db.insert_file(InsertFileRequest {
+            id: id.to_string(),
+            path: path.to_string(),
+            name: name.to_string(),
+            extension: extension.to_string(),
+            size,
+            mtime,
+            ctime: 0,
+            is_dir: false,
+            state_code: 0,
+        })
+        .expect("insert scoped file");
+    }
+
     fn operation_log(id: &str, batch_id: &str, status: &str) -> OperationLogDto {
         let success = status == "success";
         OperationLogDto {

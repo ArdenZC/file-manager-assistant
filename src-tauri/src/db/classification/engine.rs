@@ -19,13 +19,117 @@ impl Database {
         )
     }
 
+    pub fn execute_rules_for_scope(
+        &self,
+        scope: &LibraryScope,
+        rules: Vec<Rule>,
+    ) -> Result<RuleExecutionSummary, DbError> {
+        let settings = crate::settings::get_app_settings(self)?;
+        self.execute_rules_for_scope_with_folder_naming_language(
+            scope,
+            rules,
+            &settings.folder_naming_language,
+        )
+    }
+
+    fn execute_rules_for_scope_with_folder_naming_language(
+        &self,
+        scope: &LibraryScope,
+        rules: Vec<Rule>,
+        folder_naming_language: &str,
+    ) -> Result<RuleExecutionSummary, DbError> {
+        let all_rules = active_rules(rules);
+        let rule_version = classification_version_for_rules(&all_rules, folder_naming_language)?;
+        let scoped = scoped_files_sql(Some(scope));
+        let sql = format!(
+            r#"
+                WITH {},
+                dup_groups AS (
+                    SELECT size, content_hash
+                    FROM scoped_files
+                    WHERE is_dir = 0
+                      AND content_hash <> ''
+                    GROUP BY size, content_hash
+                    HAVING COUNT(*) > 1
+                )
+                SELECT f.id, f.path, f.name, f.extension, f.size, f.mtime, f.ctime, f.is_dir, f.state_code,
+                       f.file_type, f.purpose, f.lifecycle, f.context, f.risk_level, f.suggested_action,
+                       f.suggested_target_path, f.suggested_name, f.confidence, f.classification_reason,
+                       f.classification_status, f.matched_rules, f.requires_confirmation, f.content_hash,
+                       (dg.content_hash IS NOT NULL) AS is_duplicate,
+                       f.is_stale, f.last_seen_at, f.last_classified_at, f.classified_rule_version,
+                       f.last_classified_mtime, f.last_classified_size
+                FROM scoped_files AS f
+                LEFT JOIN dup_groups AS dg
+                  ON dg.size = f.size
+                 AND dg.content_hash = f.content_hash
+                WHERE f.lifecycle = 'Inbox'
+                ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
+                "#,
+            scoped.cte
+        );
+        let read_conn = self.conn()?;
+        let mut write_conn = self.conn()?;
+        let mut stmt = read_conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(scoped.params.iter()))?;
+
+        let mut scanned = 0_i64;
+        let mut updated = 0_i64;
+        let mut skipped = 0_i64;
+        let mut needs_confirmation = 0_i64;
+        let mut batch = Vec::with_capacity(CLASSIFY_BATCH_SIZE);
+
+        while let Some(row) = rows.next()? {
+            let row = indexed_file_from_row(row)?;
+            scanned += 1;
+            if !should_classify_file(&row, &rule_version) {
+                skipped += 1;
+                continue;
+            }
+
+            batch.push(row);
+
+            if batch.len() == CLASSIFY_BATCH_SIZE {
+                let batch_summary = execute_classification_batch(
+                    &mut write_conn,
+                    &batch,
+                    &all_rules,
+                    &rule_version,
+                    folder_naming_language,
+                )?;
+                updated += batch_summary.updated;
+                needs_confirmation += batch_summary.needs_confirmation;
+                batch.clear();
+            }
+        }
+
+        if !batch.is_empty() {
+            let batch_summary = execute_classification_batch(
+                &mut write_conn,
+                &batch,
+                &all_rules,
+                &rule_version,
+                folder_naming_language,
+            )?;
+            updated += batch_summary.updated;
+            needs_confirmation += batch_summary.needs_confirmation;
+        }
+
+        Ok(RuleExecutionSummary {
+            scanned,
+            updated,
+            skipped,
+            needs_confirmation,
+        })
+    }
+
     fn execute_rules_on_inbox_with_folder_naming_language(
         &self,
         rules: Vec<Rule>,
         folder_naming_language: &str,
     ) -> Result<RuleExecutionSummary, DbError> {
         let all_rules = active_rules(rules);
-        let rule_version = rule_version_for_rules(&all_rules)?;
+        let rule_version = classification_version_for_rules(&all_rules, folder_naming_language)?;
         let read_conn = self.conn()?;
         let mut write_conn = self.conn()?;
         let mut stmt = read_conn.prepare(
@@ -137,7 +241,7 @@ impl Database {
         }
 
         let all_rules = active_rules(rules);
-        let rule_version = rule_version_for_rules(&all_rules)?;
+        let rule_version = classification_version_for_rules(&all_rules, folder_naming_language)?;
         let placeholders = std::iter::repeat("?")
             .take(target_paths.len())
             .collect::<Vec<_>>()
@@ -244,6 +348,19 @@ pub(crate) fn rule_version_for_rules(rules: &[Rule]) -> Result<String, DbError> 
             .then_with(|| left.source.cmp(&right.source))
     });
     let payload = serde_json::to_string(&stable_rules)?;
+    let digest = Sha256::digest(payload.as_bytes());
+    Ok(digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
+}
+
+fn classification_version_for_rules(
+    rules: &[Rule],
+    folder_naming_language: &str,
+) -> Result<String, DbError> {
+    let rules_version = rule_version_for_rules(rules)?;
+    let payload = format!("{rules_version}:folder_naming_language={folder_naming_language}");
     let digest = Sha256::digest(payload.as_bytes());
     Ok(digest
         .iter()

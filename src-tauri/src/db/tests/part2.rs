@@ -106,6 +106,53 @@
     }
 
     #[test]
+    fn execute_rules_for_scope_classifies_only_scoped_roots() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-root-a-resume",
+            "/tmp/root-a/resume_2026.pdf",
+            "resume_2026.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        insert_test_file_at_path(
+            &db,
+            "file-root-b-invoice",
+            "/tmp/root-b/invoice_apple.pdf",
+            "invoice_apple.pdf",
+            "pdf",
+            4_096,
+            1_900_000_001,
+        );
+
+        let summary = db
+            .execute_rules_for_scope(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                Vec::new(),
+            )
+            .expect("execute scoped rules");
+        let root_a = file_classification(&db, "/tmp/root-a/resume_2026.pdf")
+            .expect("root a file");
+        let root_b = file_classification(&db, "/tmp/root-b/invoice_apple.pdf")
+            .expect("root b file");
+
+        assert_eq!(summary.scanned, 1);
+        assert_eq!(summary.updated, 1);
+        assert_eq!(
+            root_a,
+            ("Career".to_string(), "Reference".to_string(), false)
+        );
+        assert_eq!(
+            root_b,
+            ("Unknown".to_string(), "Inbox".to_string(), false)
+        );
+    }
+
+    #[test]
     fn execute_rules_for_paths_ignores_missing_paths() {
         let db = Database::open(test_db_path()).expect("open test database");
 
@@ -604,6 +651,92 @@
     }
 
     #[test]
+    fn execute_rules_classifies_common_real_world_files_into_actionable_suggestions() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let samples = [
+            ("file-photo", "photo_001.jpg", "jpg", "Media", "Media/Images"),
+            (
+                "file-screenshot",
+                "截图_桌面.png",
+                "png",
+                "Media",
+                "Screenshots",
+            ),
+            ("file-video", "vacation.mp4", "mp4", "Media", "Media/Videos"),
+            (
+                "file-lecture",
+                "lecture_notes.pdf",
+                "pdf",
+                "Study",
+                "Study",
+            ),
+            (
+                "file-thesis",
+                "毕业论文最终版.docx",
+                "docx",
+                "Study",
+                "Study",
+            ),
+            ("file-budget", "budget.xlsx", "xlsx", "Finance", "Finance"),
+            (
+                "file-slides",
+                "slides.pptx",
+                "pptx",
+                "Work",
+                "Presentations",
+            ),
+            (
+                "file-archive",
+                "archive.zip",
+                "zip",
+                "Archive",
+                "Archives",
+            ),
+            (
+                "file-package",
+                "package.json",
+                "json",
+                "Project",
+                "Projects",
+            ),
+            (
+                "file-new-text",
+                "新建文本文档.txt",
+                "txt",
+                "Temporary",
+                "90_Temporary",
+            ),
+        ];
+
+        for (id, name, extension, _, _) in samples {
+            insert_test_file(&db, id, name, extension, 2_048, 1_900_000_000);
+        }
+
+        db.execute_rules_on_inbox(Vec::new())
+            .expect("execute rules");
+        let page = db.get_paged_files(Some(50), Some(0), None).expect("page");
+
+        for (_, name, _, expected_purpose, target_fragment) in samples {
+            let file = page
+                .files
+                .iter()
+                .find(|file| file.name == name)
+                .unwrap_or_else(|| panic!("classified sample {name}"));
+            let normalized_target = file.suggested_target_path.replace('\\', "/");
+
+            assert_eq!(file.classification_status, "classified", "{name}");
+            assert_eq!(file.purpose, expected_purpose, "{name}");
+            assert_ne!(file.suggested_action, "Keep", "{name}");
+            assert!(!file.suggested_target_path.is_empty(), "{name}");
+            assert!(
+                normalized_target.contains(target_fragment),
+                "{name} target was {}",
+                file.suggested_target_path
+            );
+        }
+    }
+
+    #[test]
     fn file_records_expose_classification_status_for_unclassified_and_classified_files() {
         let db = Database::open(test_db_path()).expect("open test database");
         insert_test_file(
@@ -743,3 +876,112 @@
         assert_eq!(results[0].name, "项目报告2026_final.pdf");
     }
 
+    #[test]
+    fn search_files_uses_like_fallback_for_cjk_short_terms() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let samples = [
+            ("file-thesis", "毕业论文最终版.docx", "docx"),
+            ("file-report", "课程报告.pdf", "pdf"),
+            ("file-screenshot", "截图_桌面.png", "png"),
+            ("file-photo", "照片001.jpg", "jpg"),
+            ("file-java", "Java学习笔记.md", "md"),
+        ];
+        for (id, name, extension) in samples {
+            insert_test_file(&db, id, name, extension, 2_048, 1_900_000_000);
+        }
+
+        for (query, expected_name) in [
+            ("论文", "毕业论文最终版.docx"),
+            ("报告", "课程报告.pdf"),
+            ("截图", "截图_桌面.png"),
+            ("照片", "照片001.jpg"),
+            ("学习", "Java学习笔记.md"),
+            ("Java", "Java学习笔记.md"),
+        ] {
+            let names = db
+                .search_files(query, Some(10))
+                .expect("search")
+                .into_iter()
+                .map(|file| file.name)
+                .collect::<Vec<_>>();
+
+            assert!(
+                names.iter().any(|name| name == expected_name),
+                "{query} returned {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_paged_files_uses_like_fallback_for_cjk_short_terms() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let samples = [
+            ("file-thesis", "毕业论文最终版.docx", "docx"),
+            ("file-report", "课程报告.pdf", "pdf"),
+            ("file-screenshot", "截图_桌面.png", "png"),
+            ("file-photo", "照片001.jpg", "jpg"),
+            ("file-java", "Java学习笔记.md", "md"),
+        ];
+        for (id, name, extension) in samples {
+            insert_test_file(&db, id, name, extension, 2_048, 1_900_000_000);
+        }
+
+        for (query, expected_name) in [
+            ("论文", "毕业论文最终版.docx"),
+            ("报告", "课程报告.pdf"),
+            ("截图", "截图_桌面.png"),
+            ("照片", "照片001.jpg"),
+            ("学习", "Java学习笔记.md"),
+            ("Java", "Java学习笔记.md"),
+        ] {
+            let page = db
+                .get_paged_files(Some(10), Some(0), Some(query))
+                .expect("page search");
+            let names = page
+                .files
+                .into_iter()
+                .map(|file| file.name)
+                .collect::<Vec<_>>();
+
+            assert!(
+                names.iter().any(|name| name == expected_name),
+                "{query} returned {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_files_filters_by_library_scope_roots() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-root-a",
+            "/tmp/root-a/a.pdf",
+            "a.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        insert_test_file_at_path(
+            &db,
+            "file-root-b",
+            "/tmp/root-b/b.pdf",
+            "b.pdf",
+            "pdf",
+            4_096,
+            1_900_000_001,
+        );
+
+        let results = db
+            .search_files_in_scope(
+                "pdf",
+                Some(10),
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+            )
+            .expect("search root a");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "a.pdf");
+    }

@@ -4,9 +4,9 @@ import type { useAppChrome } from "../hooks/useAppChrome";
 import type { useAppSettings } from "../hooks/useAppSettings";
 import type { useWindowBehavior } from "../hooks/useWindowBehavior";
 import type {
-  DefaultScanFolder,
   FolderNamingLanguage,
   RestoreRetentionDays,
+  ScanRootSetting,
   Rule
 } from "../types/domain";
 import type { ThemeMode, Translator, View } from "../types/ui";
@@ -20,7 +20,7 @@ export type AppSettingsContextState = ReturnType<typeof useAppSettings>;
 
 export interface SettingsContextValue extends AppSettingsContextState {
   setFolderNamingLanguage: (next: FolderNamingLanguage) => Promise<boolean>;
-  setDefaultScanFolders: (next: DefaultScanFolder[]) => Promise<boolean>;
+  setDefaultScanFolders: (next: ScanRootSetting[]) => Promise<boolean>;
   setRestoreRetentionDays: (next: RestoreRetentionDays) => Promise<boolean>;
   setLaunchAtLogin: (next: boolean) => Promise<boolean>;
 }

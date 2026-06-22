@@ -4,12 +4,13 @@ import { useChromeContext } from "../../contexts/AppContexts";
 import { useFileLibraryStore } from "../../store/useFileLibraryStore";
 import { useScanManagerStore } from "../../store/useScanManagerStore";
 import { formatBytes, percent } from "../../utils/format";
-import { compactPath, splitDisplaySize } from "../../utils/viewHelpers";
+import { compactPath, libraryScopeLabel, splitDisplaySize } from "../../utils/viewHelpers";
 import { cn, glassButton, glassButtonPrimary } from "../../utils/tw";
 import { pageSurface, panelSurface, quietText } from "../shared/ui";
 
 export function ScannerView() {
   const { t } = useChromeContext();
+  const scope = useFileLibraryStore((state) => state.scope);
   const stats = useFileLibraryStore((state) => state.stats);
   const files = useFileLibraryStore((state) => state.libraryPage.files);
   const selectedFolders = useScanManagerStore((state) => state.selectedFolders);
@@ -23,7 +24,7 @@ export function ScannerView() {
   const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, scopedTotalSize / stats.diskTotalSize) : 0;
   const clutterItems = files.filter((file) => file.requires_confirmation || file.is_duplicate || file.size > 1024 * 1024 * 1024).length;
   const clutterRatio = files.length ? Math.min(1, clutterItems / files.length) : 0;
-  const scopeLabel = selectedFolders[0] ?? t("userSpaceHint");
+  const scopeLabel = libraryScopeLabel(scope, t("allIndexedFiles"), selectedFolders[0] ?? t("userSpaceHint"));
   const analysedSize = splitDisplaySize(formatBytes(scopedTotalSize));
 
   return (

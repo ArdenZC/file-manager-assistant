@@ -15,9 +15,9 @@ import { useRulesStore } from "../store/useRulesStore";
 import { useScanManagerStore } from "../store/useScanManagerStore";
 import type {
   CloseBehavior,
-  DefaultScanFolder,
   FolderNamingLanguage,
   RestoreRetentionDays,
+  ScanRootSetting,
   Rule
 } from "../types/domain";
 import { applySearchNavigation } from "../utils/searchNavigation";
@@ -69,6 +69,10 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
   const { settings: appSettings, isLoadingSettings, updateSettings } = appSettingsState;
   useFsWatcher({ onRefreshData: refreshCurrentQuery, onError: showError, rules });
 
+  useEffect(() => {
+    useScanManagerStore.getState().setDefaultScanRoots(appSettings.defaultScanFolders);
+  }, [appSettings.defaultScanFolders]);
+
   const appChrome = useAppChrome({ theme, setTheme, setLanguage });
   const {
     commandInputRef,
@@ -115,7 +119,7 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     [updateSettings]
   );
   const setDefaultScanFolders = useCallback(
-    async (next: DefaultScanFolder[]) => {
+    async (next: ScanRootSetting[]) => {
       const savedSettings = await updateSettings({ defaultScanFolders: next });
       return arraysEqual(savedSettings.defaultScanFolders, next);
     },
@@ -293,6 +297,6 @@ function StoreRuntimeBootstrapper() {
   return null;
 }
 
-function arraysEqual(left: readonly string[], right: readonly string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+function arraysEqual<T>(left: readonly T[], right: readonly T[]) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

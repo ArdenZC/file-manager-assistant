@@ -7,7 +7,8 @@ use zen_canvas_tauri::{
     db::Database,
     settings::{
         get_app_settings, save_app_settings, save_app_settings_with_launch_at_login,
-        sync_launch_at_login_from_system, AppSettings, LaunchAtLoginController, APP_SETTINGS_KEY,
+        sync_launch_at_login_from_system, AppSettings, LaunchAtLoginController, ScanRootSetting,
+        APP_SETTINGS_KEY,
     },
 };
 
@@ -33,10 +34,7 @@ fn new_database_creates_default_app_settings_row() {
     assert_eq!(version, 10);
     assert_eq!(settings.close_behavior, "ask");
     assert_eq!(settings.folder_naming_language, "en");
-    assert_eq!(
-        settings.default_scan_folders,
-        vec!["Desktop", "Downloads", "Documents"]
-    );
+    assert_default_scan_roots(&settings.default_scan_folders);
     assert_eq!(settings.restore_retention_days, 30);
     assert!(!settings.launch_at_login);
 }
@@ -73,10 +71,7 @@ fn schema_7_database_migrates_to_settings_without_losing_existing_rows() {
     assert_eq!(version, 10);
     assert_eq!(file_name, "legacy.pdf");
     assert_eq!(rule_name, "Legacy Rule");
-    assert_eq!(
-        default_settings.default_scan_folders,
-        vec!["Desktop", "Downloads", "Documents"]
-    );
+    assert_default_scan_roots(&default_settings.default_scan_folders);
 }
 
 #[test]
@@ -85,7 +80,12 @@ fn app_settings_roundtrip_persists_single_json_row() {
     let mut settings = AppSettings::default();
     settings.close_behavior = "quit".to_string();
     settings.folder_naming_language = "zh".to_string();
-    settings.default_scan_folders = vec!["Downloads".to_string()];
+    settings.default_scan_folders = vec![scan_root(
+        "downloads",
+        "/Users/zen/Downloads",
+        "Downloads",
+        true,
+    )];
     settings.restore_retention_days = 90;
     settings.launch_at_login = true;
 
@@ -98,10 +98,46 @@ fn app_settings_roundtrip_persists_single_json_row() {
 
     assert_eq!(loaded.close_behavior, "quit");
     assert_eq!(loaded.folder_naming_language, "zh");
-    assert_eq!(loaded.default_scan_folders, vec!["Downloads"]);
+    assert_eq!(
+        loaded.default_scan_folders,
+        vec![scan_root(
+            "downloads",
+            "/Users/zen/Downloads",
+            "Downloads",
+            true
+        )]
+    );
     assert_eq!(loaded.restore_retention_days, 90);
     assert!(loaded.launch_at_login);
     assert_eq!(row_count, 1);
+}
+
+#[test]
+fn legacy_string_default_scan_folders_load_as_absolute_scan_roots() {
+    let db = Database::open(test_db_path()).expect("open test database");
+    let conn = Connection::open(db.path()).expect("open migrated database");
+    conn.execute(
+        r#"
+        INSERT INTO app_settings (key, value)
+        VALUES (?1, ?2)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        "#,
+        params![
+            APP_SETTINGS_KEY,
+            r#"{
+              "closeBehavior":"ask",
+              "folderNamingLanguage":"en",
+              "defaultScanFolders":["Desktop","Downloads","Documents"],
+              "restoreRetentionDays":30,
+              "launchAtLogin":false
+            }"#
+        ],
+    )
+    .expect("insert legacy settings");
+
+    let loaded = get_app_settings(&db).expect("load migrated legacy settings");
+
+    assert_default_scan_roots(&loaded.default_scan_folders);
 }
 
 #[test]
@@ -270,6 +306,34 @@ fn insert_operation_log(conn: &Connection, id: &str, batch_id: &str, created_at:
         params![id, batch_id, created_at],
     )
     .expect("insert operation log");
+}
+
+fn scan_root(id: &str, path: &str, label: &str, enabled: bool) -> ScanRootSetting {
+    ScanRootSetting {
+        id: id.to_string(),
+        path: path.to_string(),
+        label: label.to_string(),
+        enabled,
+        created_at: "2026-06-22T00:00:00.000Z".to_string(),
+    }
+}
+
+fn assert_default_scan_roots(roots: &[ScanRootSetting]) {
+    assert_eq!(roots.len(), 3);
+    for label in ["Desktop", "Downloads", "Documents"] {
+        let root = roots
+            .iter()
+            .find(|root| root.label == label)
+            .unwrap_or_else(|| panic!("missing {label} root"));
+        assert!(root.enabled);
+        assert!(!root.id.is_empty());
+        assert!(!root.created_at.is_empty());
+        assert!(
+            root.path.replace('\\', "/").ends_with(&format!("/{label}")),
+            "{} did not end with /{label}",
+            root.path
+        );
+    }
 }
 
 fn string_column_values(conn: &Connection, sql: &str) -> Vec<String> {

@@ -11,6 +11,7 @@ import { useOperationQueueStore } from "../../store/useOperationQueueStore";
 import type { FileRecord } from "../../types/domain";
 import type { Translator, View } from "../../types/ui";
 import { formatBytes } from "../../utils/format";
+import { libraryScopeLabel } from "../../utils/viewHelpers";
 import { shouldVirtualizeList } from "../../utils/virtualization";
 import { cn, emptyState, glassButtonPrimary, toneClasses, virtualList, virtualRow as virtualRowClass, virtualSpacer } from "../../utils/tw";
 import { revealFileFromCard } from "../shared/cardActions";
@@ -49,6 +50,7 @@ export function groupFilesByHubBucket(files: readonly FileRecord[]): HubBucketGr
 export function HubView() {
   const { t, setView, onError } = useChromeContext();
   const files = useFileLibraryStore((state) => state.libraryPage.files);
+  const scope = useFileLibraryStore((state) => state.scope);
   const { rules } = useRulesContext();
   const runDispatch = useOperationQueueStore((state) => state.runDispatch);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -62,6 +64,7 @@ export function HubView() {
     { key: "PrivacyVault" as const, label: t("privacyVault"), description: t("privacyVaultDesc"), tone: "red" }
   ] satisfies Array<{ key: HubBucketKey; label: string; description: string; tone: string }>, [t]);
   const bucketedFiles = useMemo(() => groupFilesByHubBucket(sortedFiles), [sortedFiles]);
+  const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
 
   async function dispatchFiles() {
     if (isDispatching || !files.length) return;
@@ -79,7 +82,10 @@ export function HubView() {
     <div className="grid h-full min-h-0 grid-cols-[minmax(300px,0.8fr)_minmax(0,1.4fr)] gap-4 overflow-hidden">
       <section className={cn(panelSurface, "flex flex-col gap-4 overflow-hidden")}>
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">{t("inboxStack")}</h2>
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold">{t("inboxStack")}</h2>
+            <p className="truncate text-xs text-[var(--muted)]">{t("currentOrganizeScope")}: {scopeText}</p>
+          </div>
           <span className={mutedText}>{pendingFiles.length} {t("items")}</span>
         </div>
         <VirtualFileCardList files={pendingFiles} onError={onError} t={t} />

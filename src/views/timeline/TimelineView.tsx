@@ -4,10 +4,11 @@ import { motion } from "motion/react";
 import { Folder, Play, X } from "lucide-react";
 import type { OperationProgressPayload } from "../../api/tauriApi";
 import { useChromeContext } from "../../contexts/AppContexts";
+import { useFileLibraryStore } from "../../store/useFileLibraryStore";
 import { useOperationQueueStore } from "../../store/useOperationQueueStore";
 import type { OperationPreview } from "../../types/domain";
 import type { Translator } from "../../types/ui";
-import { groupOperationPreviews, compactPath } from "../../utils/viewHelpers";
+import { groupOperationPreviews, compactPath, libraryScopeLabel } from "../../utils/viewHelpers";
 import { shouldVirtualizeList } from "../../utils/virtualization";
 import { cn, emptyState, glassButton, glassButtonPrimary, sectionTitle, virtualList, virtualRow as virtualRowClass, virtualSpacer } from "../../utils/tw";
 import { listMotion, pageSurface, panelSurface, rowSurface } from "../shared/ui";
@@ -17,6 +18,7 @@ const PREVIEW_ROW_HEIGHT = 156;
 
 export function TimelineView() {
   const { t } = useChromeContext();
+  const scope = useFileLibraryStore((state) => state.scope);
   const previews = useOperationQueueStore((state) => state.displayPreviews);
   const selectedIds = useOperationQueueStore((state) => state.selectedOperationIds);
   const setSelectedIds = useOperationQueueStore((state) => state.setSelectedOperationIds);
@@ -39,6 +41,7 @@ export function TimelineView() {
   const blockedCount = previews.length - executableCount;
   const executeProgress = operationProgress?.kind === "execute" ? operationProgress : null;
   const isExecuting = Boolean(executeProgress);
+  const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
 
   return (
     <div className={pageSurface}>
@@ -47,6 +50,7 @@ export function TimelineView() {
           <div>
             <h2>{t("suggestedPlan")}</h2>
             <p>{t("previewBeforeExecute")}</p>
+            <p className="truncate text-xs text-[var(--muted)]">{t("currentOrganizeScope")}: {scopeText}</p>
           </div>
           <button className={glassButtonPrimary} onClick={executeSelected} disabled={!selectedIds.size || isExecuting}>
             <Play size={16} />

@@ -36,8 +36,14 @@ pub fn search_files(
     db: State<'_, Database>,
     query: String,
     limit: Option<u32>,
-) -> Result<Vec<FileSearchResult>, String> {
-    db.search_files(&query, limit).map_err(command_error)
+    scope: Option<LibraryScope>,
+) -> Result<Vec<FileRecordDto>, String> {
+    match scope.as_ref() {
+        Some(scope) => db
+            .search_files_in_scope(&query, limit, scope)
+            .map_err(command_error),
+        None => db.search_files(&query, limit).map_err(command_error),
+    }
 }
 
 #[tauri::command]
@@ -46,14 +52,27 @@ pub fn get_paged_files(
     limit: Option<u32>,
     offset: Option<u32>,
     query: Option<String>,
+    scope: Option<LibraryScope>,
 ) -> Result<PagedFilesResult, String> {
-    db.get_paged_files(limit, offset, query.as_deref())
-        .map_err(command_error)
+    match scope.as_ref() {
+        Some(scope) => db
+            .get_paged_files_in_scope(limit, offset, query.as_deref(), scope)
+            .map_err(command_error),
+        None => db
+            .get_paged_files(limit, offset, query.as_deref())
+            .map_err(command_error),
+    }
 }
 
 #[tauri::command]
-pub fn get_stats_summary(db: State<'_, Database>) -> Result<StatsSummary, String> {
-    db.get_stats_summary().map_err(command_error)
+pub fn get_stats_summary(
+    db: State<'_, Database>,
+    scope: Option<LibraryScope>,
+) -> Result<StatsSummary, String> {
+    match scope.as_ref() {
+        Some(scope) => db.get_stats_summary_in_scope(scope).map_err(command_error),
+        None => db.get_stats_summary().map_err(command_error),
+    }
 }
 
 #[tauri::command]
@@ -99,6 +118,19 @@ pub async fn execute_rules_for_paths(
 ) -> Result<RuleExecutionSummary, String> {
     let db = db.inner().clone();
     tauri::async_runtime::spawn_blocking(move || db.execute_rules_for_paths(&paths, rules))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn execute_rules_for_scope(
+    db: State<'_, Database>,
+    scope: LibraryScope,
+    rules: Vec<Rule>,
+) -> Result<RuleExecutionSummary, String> {
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || db.execute_rules_for_scope(&scope, rules))
         .await
         .map_err(|error| error.to_string())?
         .map_err(command_error)

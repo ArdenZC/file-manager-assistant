@@ -1,4 +1,4 @@
-import type { AppSnapshot, FileQuery, FileRecord, OperationPreview } from "../types/domain";
+import type { AppSnapshot, FileQuery, FileRecord, LibraryScope, OperationPreview } from "../types/domain";
 import type { Language } from "../i18n";
 import type { ThemeMode, Translator } from "../types/ui";
 
@@ -36,6 +36,13 @@ export function compactPath(value: string | null | undefined, maxLength = 42) {
   if (!value) return "-";
   if (value.length <= maxLength) return value;
   return `${value.slice(0, Math.max(8, Math.floor(maxLength * 0.45)))}...${value.slice(-Math.max(8, Math.floor(maxLength * 0.35)))}`;
+}
+
+export function libraryScopeLabel(scope: LibraryScope, allLabel: string, emptyLabel: string, maxLength = 64) {
+  if (scope.kind === "all") return allLabel;
+  if (!scope.roots.length) return emptyLabel;
+  if (scope.roots.length === 1) return compactPath(scope.roots[0], maxLength);
+  return `${compactPath(scope.roots[0], Math.max(32, maxLength - 10))} +${scope.roots.length - 1}`;
 }
 
 export function delay(ms: number) {

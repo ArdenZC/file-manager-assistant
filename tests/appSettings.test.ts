@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_APP_SETTINGS,
+  createScanRootSetting,
+  enabledScanRootPaths,
   mergeAppSettings,
-  nextDefaultScanFolders
+  removeDefaultScanRoot,
+  toggleDefaultScanRoot,
+  upsertDefaultScanRoot
 } from "../src/hooks/useAppSettings";
 
 describe("app settings helpers", () => {
@@ -10,7 +14,7 @@ describe("app settings helpers", () => {
     expect(DEFAULT_APP_SETTINGS).toEqual({
       closeBehavior: "ask",
       folderNamingLanguage: "en",
-      defaultScanFolders: ["Desktop", "Downloads", "Documents"],
+      defaultScanFolders: [],
       restoreRetentionDays: 30,
       launchAtLogin: false
     });
@@ -20,23 +24,40 @@ describe("app settings helpers", () => {
     const previous = DEFAULT_APP_SETTINGS;
 
     const next = mergeAppSettings(previous, {
-      defaultScanFolders: ["Downloads"],
+      defaultScanFolders: [
+        createScanRootSetting("F:/Downloads", "2026-06-22T00:00:00.000Z")
+      ],
       restoreRetentionDays: 90
     });
 
     expect(next).toEqual({
       closeBehavior: "ask",
       folderNamingLanguage: "en",
-      defaultScanFolders: ["Downloads"],
+      defaultScanFolders: [
+        {
+          id: "scan-root-f-downloads",
+          path: "F:/Downloads",
+          label: "Downloads",
+          enabled: true,
+          createdAt: "2026-06-22T00:00:00.000Z"
+        }
+      ],
       restoreRetentionDays: 90,
       launchAtLogin: false
     });
-    expect(previous.defaultScanFolders).toEqual(["Desktop", "Downloads", "Documents"]);
+    expect(previous.defaultScanFolders).toEqual([]);
   });
 
-  it("toggles default scan folders while keeping at least one selected", () => {
-    expect(nextDefaultScanFolders(["Desktop", "Downloads"], "Downloads")).toEqual(["Desktop"]);
-    expect(nextDefaultScanFolders(["Desktop"], "Desktop")).toEqual(["Desktop"]);
-    expect(nextDefaultScanFolders(["Desktop"], "Documents")).toEqual(["Desktop", "Documents"]);
+  it("adds, disables, removes, and lists arbitrary default scan roots", () => {
+    const createdAt = "2026-06-22T00:00:00.000Z";
+    const downloads = createScanRootSetting("F:/Downloads", createdAt);
+    const projects = createScanRootSetting("D:/Work/Projects", createdAt);
+    const roots = upsertDefaultScanRoot([downloads], "D:/Work/Projects", createdAt);
+    const disabled = toggleDefaultScanRoot(roots, projects.id, false);
+
+    expect(roots).toEqual([downloads, projects]);
+    expect(enabledScanRootPaths(disabled)).toEqual(["F:/Downloads"]);
+    expect(upsertDefaultScanRoot(disabled, "d:/work/projects", createdAt)[1].enabled).toBe(true);
+    expect(removeDefaultScanRoot(roots, downloads.id)).toEqual([projects]);
   });
 });

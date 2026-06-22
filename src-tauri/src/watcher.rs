@@ -1,4 +1,4 @@
-use crate::path_filter::is_ignored_dir_name;
+use crate::{path_filter::is_ignored_dir_name, settings::ScanRootSetting};
 use notify::{
     event::ModifyKind, recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode,
     Watcher,
@@ -16,7 +16,6 @@ use thiserror::Error;
 const FILE_EVENT_NAME: &str = "fs-event";
 const WATCHER_READY_EVENT_NAME: &str = "fs-watcher-ready";
 const WATCHER_ERROR_EVENT_NAME: &str = "fs-watcher-error";
-const DEFAULT_SCAN_FOLDER_NAMES: [&str; 3] = ["Desktop", "Downloads", "Documents"];
 
 #[derive(Debug, Error)]
 enum WatcherError {
@@ -62,18 +61,14 @@ pub fn setup_file_watcher<R: Runtime>(
     setup_file_watcher_inner(app, paths).map_err(|error| error.to_string())
 }
 
-pub fn watch_paths_from_default_scan_folders(
-    home: Option<&Path>,
-    folders: &[String],
-) -> Vec<PathBuf> {
-    match home {
-        Some(home) => folders
-            .iter()
-            .filter(|name| DEFAULT_SCAN_FOLDER_NAMES.contains(&name.as_str()))
-            .map(|name| home.join(name))
-            .collect(),
-        None => Vec::new(),
-    }
+pub fn watch_paths_from_default_scan_folders(folders: &[ScanRootSetting]) -> Vec<PathBuf> {
+    folders
+        .iter()
+        .filter(|root| root.enabled)
+        .map(|root| root.path.trim())
+        .filter(|path| !path.is_empty() && looks_absolute_path(path))
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn setup_file_watcher_inner<R: Runtime>(
@@ -161,35 +156,39 @@ fn event_to_payload(event: Event) -> Option<FileWatchEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::ScanRootSetting;
     use notify::event::{AccessKind, EventAttributes};
 
     #[test]
-    fn watch_paths_follow_default_scan_folder_settings() {
-        let home = PathBuf::from("/Users/zen");
-        let folders = vec!["Downloads".to_string(), "Documents".to_string()];
+    fn watch_paths_follow_enabled_absolute_scan_root_settings() {
+        let folders = vec![
+            scan_root("downloads", "/Users/zen/Downloads", true),
+            scan_root("projects", "/Volumes/Work/Projects", true),
+            scan_root("archive", "/Volumes/Archive", false),
+        ];
 
-        let paths = watch_paths_from_default_scan_folders(Some(home.as_path()), &folders);
+        let paths = watch_paths_from_default_scan_folders(&folders);
 
-        assert_eq!(paths, vec![home.join("Downloads"), home.join("Documents")]);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/Users/zen/Downloads"),
+                PathBuf::from("/Volumes/Work/Projects")
+            ]
+        );
     }
 
     #[test]
-    fn watch_paths_are_empty_without_home_directory() {
-        let folders = vec!["Desktop".to_string()];
+    fn watch_paths_ignore_disabled_empty_and_relative_roots() {
+        let folders = vec![
+            scan_root("downloads", "/Users/zen/Downloads", false),
+            scan_root("empty", "", true),
+            scan_root("relative", "Downloads", true),
+        ];
 
-        let paths = watch_paths_from_default_scan_folders(None, &folders);
+        let paths = watch_paths_from_default_scan_folders(&folders);
 
         assert!(paths.is_empty());
-    }
-
-    #[test]
-    fn watch_paths_ignore_unsupported_folder_names() {
-        let home = PathBuf::from("/Users/zen");
-        let folders = vec!["Downloads".to_string(), "..".to_string()];
-
-        let paths = watch_paths_from_default_scan_folders(Some(home.as_path()), &folders);
-
-        assert_eq!(paths, vec![home.join("Downloads")]);
     }
 
     #[test]
@@ -201,6 +200,16 @@ mod tests {
         };
 
         assert!(event_to_payload(event).is_none());
+    }
+
+    fn scan_root(id: &str, path: &str, enabled: bool) -> ScanRootSetting {
+        ScanRootSetting {
+            id: id.to_string(),
+            path: path.to_string(),
+            label: id.to_string(),
+            enabled,
+            created_at: "2026-06-22T00:00:00.000Z".to_string(),
+        }
     }
 }
 
@@ -244,6 +253,17 @@ fn is_ignored_path(path: &Path) -> bool {
 
 fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn looks_absolute_path(path: &str) -> bool {
+    Path::new(path).is_absolute()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.as_bytes().get(0..3).is_some_and(|prefix| {
+            prefix[0].is_ascii_alphabetic()
+                && prefix[1] == b':'
+                && (prefix[2] == b'/' || prefix[2] == b'\\')
+        })
 }
 
 fn current_timestamp_ms() -> u128 {

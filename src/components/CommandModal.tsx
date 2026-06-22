@@ -68,10 +68,10 @@ export function CommandModal({
     let cancelled = false;
     setQueryState("pending");
     const timer = window.setTimeout(() => {
-      tauriApi.getPagedFiles(12, 0, trimmedSearch)
-        .then((page) => {
+      tauriApi.searchFiles(trimmedSearch, 12)
+        .then((files) => {
           if (cancelled) return;
-          setResults(page.files);
+          setResults(files);
           setQueryState("done");
           setActiveIndex(0);
         })

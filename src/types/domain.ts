@@ -50,13 +50,25 @@ export type RestoreStatus = "not_restored" | "restored" | "failed" | "unavailabl
 export type ClassificationStatus = "unclassified" | "classified";
 export type FolderNamingLanguage = "en" | "zh";
 export type CloseBehavior = "ask" | "minimize" | "quit";
-export type DefaultScanFolder = "Desktop" | "Downloads" | "Documents";
 export type RestoreRetentionDays = 15 | 30 | 60 | 90;
+
+export interface ScanRootSetting {
+  id: string;
+  path: string;
+  label: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export type LibraryScope =
+  | { kind: "current_scan"; roots: string[]; scanSessionId?: string }
+  | { kind: "roots"; roots: string[] }
+  | { kind: "all" };
 
 export interface AppSettings {
   closeBehavior: CloseBehavior;
   folderNamingLanguage: FolderNamingLanguage;
-  defaultScanFolders: DefaultScanFolder[];
+  defaultScanFolders: ScanRootSetting[];
   restoreRetentionDays: RestoreRetentionDays;
   launchAtLogin: boolean;
 }

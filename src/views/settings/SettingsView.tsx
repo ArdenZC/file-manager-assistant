@@ -1,7 +1,14 @@
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { FolderPlus, Play, Trash2 } from "lucide-react";
 import { useChromeContext, useSettingsContext } from "../../contexts/AppContexts";
-import { nextDefaultScanFolders } from "../../hooks/useAppSettings";
-import type { CloseBehavior, DefaultScanFolder, FolderNamingLanguage, RestoreRetentionDays } from "../../types/domain";
+import {
+  removeDefaultScanRoot,
+  toggleDefaultScanRoot,
+  upsertDefaultScanRoot
+} from "../../hooks/useAppSettings";
+import { useScanManagerStore } from "../../store/useScanManagerStore";
+import type { CloseBehavior, FolderNamingLanguage, RestoreRetentionDays, ScanRootSetting } from "../../types/domain";
 import { defaultPlatformAccelerator } from "../../utils/viewHelpers";
 import { cn, statusToast } from "../../utils/tw";
 import { mutedText, pageSurface, panelSurface, quietText, segmented, segmentButton, sourceBadge, toggleSwitch, SectionTitle } from "../shared/ui";
@@ -29,6 +36,7 @@ export function SettingsView() {
     setRestoreRetentionDays,
     setLaunchAtLogin
   } = useSettingsContext();
+  const scanPath = useScanManagerStore((state) => state.scanPath);
   const hotkey = defaultPlatformAccelerator(platform);
   const [settingsStatus, setSettingsStatus] = useState("");
 
@@ -53,11 +61,37 @@ export function SettingsView() {
     }
   }
 
-  async function toggleDefaultScanFolder(folder: DefaultScanFolder) {
-    const saved = await setDefaultScanFolders(nextDefaultScanFolders(defaultScanFolders, folder));
+  async function addDefaultScanFolder() {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: t("folderPickerTitle")
+    });
+    const path = Array.isArray(selectedPath) ? selectedPath[0] : selectedPath;
+    if (!path?.trim()) return;
+
+    const saved = await setDefaultScanFolders(upsertDefaultScanRoot(defaultScanFolders, path));
     if (saved) {
       setSettingsStatus(`${t("settingSaved")} · ${t("defaultScanFoldersRestartHint")}`);
     }
+  }
+
+  async function setScanRootEnabled(root: ScanRootSetting, enabled: boolean) {
+    const saved = await setDefaultScanFolders(toggleDefaultScanRoot(defaultScanFolders, root.id, enabled));
+    if (saved) {
+      setSettingsStatus(`${t("settingSaved")} · ${t("defaultScanFoldersRestartHint")}`);
+    }
+  }
+
+  async function deleteScanRoot(root: ScanRootSetting) {
+    const saved = await setDefaultScanFolders(removeDefaultScanRoot(defaultScanFolders, root.id));
+    if (saved) {
+      setSettingsStatus(`${t("settingSaved")} · ${t("defaultScanFoldersRestartHint")}`);
+    }
+  }
+
+  async function scanRootNow(root: ScanRootSetting) {
+    await scanPath(root.path);
   }
 
   async function updateRestoreRetentionDays(next: RestoreRetentionDays) {
@@ -95,13 +129,32 @@ export function SettingsView() {
           </div>
         </div>
         <div className="grid gap-3 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
-          <div><strong className="block text-sm">{t("defaultScanFolders")}</strong><span className={mutedText}>{t("defaultScanFoldersDesc")}</span></div>
-          <div className="flex flex-wrap gap-2">
-            {(["Desktop", "Downloads", "Documents"] as DefaultScanFolder[]).map((folder) => (
-              <button className={segmentButton(defaultScanFolders.includes(folder))} key={folder} onClick={() => void toggleDefaultScanFolder(folder)}>
-                {folder}
-              </button>
-            ))}
+          <div className="flex items-start justify-between gap-3">
+            <div><strong className="block text-sm">{t("defaultScanFolders")}</strong><span className={mutedText}>{t("defaultScanFoldersDesc")}</span></div>
+            <button className={segmentButton(false)} onClick={() => void addDefaultScanFolder()}>
+              <FolderPlus size={15} />
+              <span>{t("addScanFolder")}</span>
+            </button>
+          </div>
+          <div className="grid gap-2">
+            {defaultScanFolders.length ? defaultScanFolders.map((root) => (
+              <div key={root.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-xl border border-[var(--line-dark)] bg-white/20 px-3 py-2 dark:bg-white/5">
+                <div className="min-w-0 text-left">
+                  <strong className="block truncate text-sm">{root.label}</strong>
+                  <span className="block truncate text-xs text-[var(--muted)]">{root.path}</span>
+                </div>
+                <button className={toggleSwitch(root.enabled)} onClick={() => void setScanRootEnabled(root, !root.enabled)} aria-label={root.enabled ? t("disableScanFolder") : t("enableScanFolder")}><i /></button>
+                <button className={segmentButton(false)} onClick={() => void scanRootNow(root)} title={t("scanNow")}>
+                  <Play size={14} />
+                  <span>{t("scanNow")}</span>
+                </button>
+                <button className={segmentButton(false)} onClick={() => void deleteScanRoot(root)} title={t("deleteScanFolder")}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )) : (
+              <div className="rounded-xl border border-dashed border-[var(--line-dark)] px-3 py-4 text-sm text-[var(--muted)]">{t("noDefaultScanFolders")}</div>
+            )}
           </div>
           <span className={quietText}>{t("defaultScanFoldersRestartHint")}</span>
         </div>

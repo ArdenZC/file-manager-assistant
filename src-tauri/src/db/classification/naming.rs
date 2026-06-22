@@ -17,6 +17,15 @@ pub(crate) fn translate_template(template: &str, language: &str) -> String {
         .replace("Study", "学业")
         .replace("Projects", "项目")
         .replace("Installers", "安装包")
+        .replace("Media/Images", "媒体/图片")
+        .replace("Media/Videos", "媒体/视频")
+        .replace("Media/Audio", "媒体/音频")
+        .replace("Documents/Spreadsheets", "文档/表格")
+        .replace("Documents/Presentations", "文档/演示")
+        .replace("Documents", "文档")
+        .replace("Screenshots", "截图")
+        .replace("Archives", "压缩包")
+        .replace("Packages", "软件包")
 }
 
 pub(crate) fn build_target_path(

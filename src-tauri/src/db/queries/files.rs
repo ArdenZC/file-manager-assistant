@@ -1,9 +1,15 @@
 use super::super::*;
 use super::*;
 use crate::file_ops::OperationLogDto;
-use rusqlite::params;
+use rusqlite::{params, params_from_iter, types::Value as SqlValue};
 use std::{collections::HashMap, fs, path::PathBuf, time::Instant};
 use sysinfo::Disks;
+
+#[derive(Debug, Clone)]
+struct SearchMatchSql {
+    cte: String,
+    params: Vec<SqlValue>,
+}
 
 impl Database {
     pub fn insert_file(&self, file: InsertFileRequest) -> Result<(), DbError> {
@@ -247,15 +253,37 @@ impl Database {
         &self,
         query: &str,
         limit: Option<u32>,
-    ) -> Result<Vec<FileSearchResult>, DbError> {
+    ) -> Result<Vec<FileRecordDto>, DbError> {
+        self.search_files_in_scope(query, limit, &LibraryScope::All)
+    }
+
+    pub fn search_files_in_scope(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+        scope: &LibraryScope,
+    ) -> Result<Vec<FileRecordDto>, DbError> {
         let Some(fts_query) = build_fts_query(query) else {
             return Ok(Vec::new());
         };
 
         let limit = i64::from(limit.unwrap_or(50).clamp(1, 200));
+        let now = current_timestamp_iso();
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
+        let scoped = scoped_files_sql(Some(scope));
+        let search = search_match_sql(&fts_query, query);
+        let sql = format!(
             r#"
+            WITH {},
+            {},
+            dup_groups AS (
+                SELECT size, content_hash
+                FROM scoped_files
+                WHERE is_dir = 0
+                  AND content_hash <> ''
+                GROUP BY size, content_hash
+                HAVING COUNT(*) > 1
+            )
             SELECT
                 f.id,
                 f.path,
@@ -263,33 +291,51 @@ impl Database {
                 f.extension,
                 f.size,
                 f.mtime,
+                f.ctime,
                 f.is_dir,
                 f.state_code,
-                bm25(files_fts, 6.0, 1.5) AS rank
-            FROM files_fts
-            JOIN files AS f ON f.rowid = files_fts.rowid
-            WHERE files_fts MATCH ?1
-              AND f.is_stale = 0
-            ORDER BY rank ASC, f.mtime DESC, length(f.path) ASC
-            LIMIT ?2
+                f.file_type,
+                f.purpose,
+                f.lifecycle,
+                f.context,
+                f.risk_level,
+                f.suggested_action,
+                f.suggested_target_path,
+                f.suggested_name,
+                f.confidence,
+                f.classification_reason,
+                f.classification_status,
+                f.matched_rules,
+                f.requires_confirmation,
+                f.content_hash,
+                (dg.content_hash IS NOT NULL) AS is_duplicate,
+                f.is_stale,
+                f.last_seen_at,
+                f.last_classified_at,
+                f.classified_rule_version,
+                f.last_classified_mtime,
+                f.last_classified_size,
+                bm.rank
+            FROM best_matches AS bm
+            JOIN scoped_files AS f ON f.rowid = bm.rowid
+            LEFT JOIN dup_groups AS dg
+              ON dg.size = f.size
+             AND dg.content_hash = f.content_hash
+            ORDER BY bm.rank ASC, f.mtime DESC, length(f.path) ASC
+            LIMIT ?
             "#,
-        )?;
+            scoped.cte, search.cte
+        );
+        let mut params = scoped.params.clone();
+        params.extend(search.params);
+        params.push(SqlValue::Integer(limit));
+        let mut stmt = conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![fts_query, limit], |row| {
-            Ok(FileSearchResult {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                name: row.get(2)?,
-                extension: row.get(3)?,
-                size: row.get(4)?,
-                mtime: row.get(5)?,
-                is_dir: row.get::<_, i64>(6)? != 0,
-                state_code: row.get(7)?,
-                rank: row.get(8)?,
-            })
-        })?;
+        let rows = stmt.query_map(params_from_iter(params.iter()), indexed_file_from_row)?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+        rows.map(|row| row.map(|file| file_record_from_indexed(file, &now)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)
     }
 
     pub fn get_paged_files(
@@ -298,30 +344,49 @@ impl Database {
         offset: Option<u32>,
         query: Option<&str>,
     ) -> Result<PagedFilesResult, DbError> {
+        self.get_paged_files_in_scope(limit, offset, query, &LibraryScope::All)
+    }
+
+    pub fn get_paged_files_in_scope(
+        &self,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        query: Option<&str>,
+        scope: &LibraryScope,
+    ) -> Result<PagedFilesResult, DbError> {
         let limit = limit.unwrap_or(50).clamp(1, 200);
         let offset = offset.unwrap_or(0);
         let now = current_timestamp_iso();
         let conn = self.conn()?;
+        let scoped = scoped_files_sql(Some(scope));
 
-        if let Some(fts_query) = query.and_then(build_fts_query) {
-            let total = conn.query_row(
+        if let Some((raw_query, fts_query)) =
+            query.and_then(|value| build_fts_query(value).map(|fts_query| (value, fts_query)))
+        {
+            let search = search_match_sql(&fts_query, raw_query);
+            let total_sql = format!(
                 r#"
+                WITH {},
+                {}
                 SELECT COUNT(*)
-                FROM files_fts
-                JOIN files AS f ON f.rowid = files_fts.rowid
-                WHERE files_fts MATCH ?1
-                  AND f.is_stale = 0
+                FROM best_matches
                 "#,
-                params![fts_query],
-                |row| row.get(0),
-            )?;
-            let mut stmt = conn.prepare(
+                scoped.cte, search.cte
+            );
+            let mut total_params = scoped.params.clone();
+            total_params.extend(search.params.clone());
+            let total =
+                conn.query_row(&total_sql, params_from_iter(total_params.iter()), |row| {
+                    row.get(0)
+                })?;
+            let page_sql = format!(
                 r#"
-                WITH dup_groups AS (
+                WITH {},
+                {},
+                dup_groups AS (
                     SELECT size, content_hash
-                    FROM files
+                    FROM scoped_files
                     WHERE is_dir = 0
-                      AND is_stale = 0
                       AND content_hash <> ''
                     GROUP BY size, content_hash
                     HAVING COUNT(*) > 1
@@ -357,22 +422,24 @@ impl Database {
                     f.classified_rule_version,
                     f.last_classified_mtime,
                     f.last_classified_size,
-                    bm25(files_fts, 6.0, 1.5) AS rank
-                FROM files_fts
-                JOIN files AS f ON f.rowid = files_fts.rowid
+                    bm.rank
+                FROM best_matches AS bm
+                JOIN scoped_files AS f ON f.rowid = bm.rowid
                 LEFT JOIN dup_groups AS dg
                   ON dg.size = f.size
                  AND dg.content_hash = f.content_hash
-                WHERE files_fts MATCH ?1
-                  AND f.is_stale = 0
-                ORDER BY rank ASC, f.mtime DESC, length(f.path) ASC
-                LIMIT ?2 OFFSET ?3
+                ORDER BY bm.rank ASC, f.mtime DESC, length(f.path) ASC
+                LIMIT ? OFFSET ?
                 "#,
-            )?;
-            let rows = stmt.query_map(
-                params![fts_query, i64::from(limit), i64::from(offset)],
-                indexed_file_from_row,
-            )?;
+                scoped.cte, search.cte
+            );
+            let mut page_params = scoped.params.clone();
+            page_params.extend(search.params);
+            page_params.push(SqlValue::Integer(i64::from(limit)));
+            page_params.push(SqlValue::Integer(i64::from(offset)));
+            let mut stmt = conn.prepare(&page_sql)?;
+            let rows =
+                stmt.query_map(params_from_iter(page_params.iter()), indexed_file_from_row)?;
             let files = rows
                 .map(|row| row.map(|file| file_record_from_indexed(file, &now)))
                 .collect::<Result<Vec<_>, _>>()?;
@@ -385,16 +452,17 @@ impl Database {
             });
         }
 
-        let total = conn.query_row("SELECT COUNT(*) FROM files WHERE is_stale = 0", [], |row| {
+        let total_sql = format!("WITH {} SELECT COUNT(*) FROM scoped_files", scoped.cte);
+        let total = conn.query_row(&total_sql, params_from_iter(scoped.params.iter()), |row| {
             row.get(0)
         })?;
-        let mut stmt = conn.prepare(
+        let page_sql = format!(
             r#"
-            WITH dup_groups AS (
+            WITH {},
+            dup_groups AS (
                 SELECT size, content_hash
-                FROM files
+                FROM scoped_files
                 WHERE is_dir = 0
-                  AND is_stale = 0
                   AND content_hash <> ''
                 GROUP BY size, content_hash
                 HAVING COUNT(*) > 1
@@ -406,16 +474,20 @@ impl Database {
                    (dg.content_hash IS NOT NULL) AS is_duplicate,
                    f.is_stale, f.last_seen_at, f.last_classified_at, f.classified_rule_version,
                    f.last_classified_mtime, f.last_classified_size
-            FROM files AS f
+            FROM scoped_files AS f
             LEFT JOIN dup_groups AS dg
               ON dg.size = f.size
              AND dg.content_hash = f.content_hash
-            WHERE f.is_stale = 0
             ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
-            LIMIT ?1 OFFSET ?2
+            LIMIT ? OFFSET ?
             "#,
-        )?;
-        let rows = stmt.query_map(params![i64::from(limit), i64::from(offset)], |row| {
+            scoped.cte
+        );
+        let mut page_params = scoped.params.clone();
+        page_params.push(SqlValue::Integer(i64::from(limit)));
+        page_params.push(SqlValue::Integer(i64::from(offset)));
+        let mut stmt = conn.prepare(&page_sql)?;
+        let rows = stmt.query_map(params_from_iter(page_params.iter()), |row| {
             indexed_file_from_row(row)
         })?;
         let files = rows
@@ -431,24 +503,24 @@ impl Database {
     }
 
     pub fn get_stats_summary(&self) -> Result<StatsSummary, DbError> {
+        self.get_stats_summary_in_scope(&LibraryScope::All)
+    }
+
+    pub fn get_stats_summary_in_scope(
+        &self,
+        scope: &LibraryScope,
+    ) -> Result<StatsSummary, DbError> {
         let conn = self.conn()?;
+        let scoped = scoped_files_sql(Some(scope));
         // 一次事务内完成所有聚合，保证快照一致性
         conn.execute_batch("BEGIN DEFERRED")?;
-        let (
-            total_files,
-            total_size,
-            large_files,
-            sensitive_files,
-            needs_confirmation,
-            duplicate_files,
-            last_mtime,
-        ): (i64, i64, i64, i64, i64, i64, Option<i64>) = conn.query_row(
+        let totals_sql = format!(
             r#"
-            WITH dup_groups AS (
+            WITH {},
+            dup_groups AS (
                 SELECT size, content_hash
-                FROM files
+                FROM scoped_files
                 WHERE is_dir = 0
-                  AND is_stale = 0
                   AND content_hash <> ''
                 GROUP BY size, content_hash
                 HAVING COUNT(*) > 1
@@ -462,14 +534,23 @@ impl Database {
                 COUNT(*)        FILTER (WHERE f.is_dir = 0 AND f.requires_confirmation = 1),
                 COUNT(*)        FILTER (WHERE f.is_dir = 0 AND dg.content_hash IS NOT NULL),
                 MAX(f.mtime)
-            FROM files AS f
+            FROM scoped_files AS f
             LEFT JOIN dup_groups AS dg
               ON dg.size = f.size
              AND dg.content_hash = f.content_hash
-            WHERE f.is_stale = 0
             "#,
-            [],
-            |row| {
+            scoped.cte
+        );
+        let (
+            total_files,
+            total_size,
+            large_files,
+            sensitive_files,
+            needs_confirmation,
+            duplicate_files,
+            last_mtime,
+        ): (i64, i64, i64, i64, i64, i64, Option<i64>) =
+            conn.query_row(&totals_sql, params_from_iter(scoped.params.iter()), |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -479,18 +560,19 @@ impl Database {
                     row.get(5)?,
                     row.get::<_, Option<i64>>(6)?,
                 ))
-            },
-        )?;
+            })?;
         let mut by_type = HashMap::new();
-        let mut stmt = conn.prepare(
+        let type_sql = format!(
             r#"
+            WITH {}
             SELECT file_type, extension, is_dir, COUNT(*)
-            FROM files
-            WHERE is_stale = 0
+            FROM scoped_files
             GROUP BY file_type, extension, is_dir
             "#,
-        )?;
-        let type_rows = stmt.query_map([], |row| {
+            scoped.cte
+        );
+        let mut stmt = conn.prepare(&type_sql)?;
+        let type_rows = stmt.query_map(params_from_iter(scoped.params.iter()), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -509,16 +591,18 @@ impl Database {
         }
         drop(stmt);
         let mut by_lifecycle = HashMap::new();
-        let mut stmt = conn.prepare(
+        let lifecycle_sql = format!(
             r#"
+            WITH {}
             SELECT lifecycle, COUNT(*)
-            FROM files
+            FROM scoped_files
             WHERE is_dir = 0
-              AND is_stale = 0
             GROUP BY lifecycle
             "#,
-        )?;
-        let lifecycle_rows = stmt.query_map([], |row| {
+            scoped.cte
+        );
+        let mut stmt = conn.prepare(&lifecycle_sql)?;
+        let lifecycle_rows = stmt.query_map(params_from_iter(scoped.params.iter()), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
         for row in lifecycle_rows {
@@ -554,4 +638,83 @@ impl Database {
             last_scanned_at: last_mtime.map(unix_seconds_to_iso),
         })
     }
+}
+
+fn search_match_sql(fts_query: &str, raw_query: &str) -> SearchMatchSql {
+    let mut cte = String::from(
+        r#"
+        fts_matches AS (
+            SELECT files_fts.rowid, bm25(files_fts, 6.0, 1.5) AS rank
+            FROM files_fts
+            WHERE files_fts MATCH ?
+        ),
+        "#,
+    );
+    let mut params = vec![SqlValue::Text(fts_query.to_string())];
+
+    if should_use_like_fallback(raw_query) {
+        let pattern = format!("%{}%", escape_like_pattern(raw_query.trim()));
+        cte.push_str(
+            r#"
+        like_matches AS (
+            SELECT f.rowid, 1000000.0 AS rank
+            FROM scoped_files AS f
+            WHERE f.name LIKE ? ESCAPE '~'
+               OR f.path LIKE ? ESCAPE '~'
+        ),
+        "#,
+        );
+        params.push(SqlValue::Text(pattern.clone()));
+        params.push(SqlValue::Text(pattern));
+    } else {
+        cte.push_str(
+            r#"
+        like_matches AS (
+            SELECT NULL AS rowid, NULL AS rank
+            WHERE 0
+        ),
+        "#,
+        );
+    }
+
+    cte.push_str(
+        r#"
+        search_matches AS (
+            SELECT f.rowid, m.rank
+            FROM fts_matches AS m
+            JOIN scoped_files AS f ON f.rowid = m.rowid
+            UNION ALL
+            SELECT rowid, rank
+            FROM like_matches
+        ),
+        best_matches AS (
+            SELECT rowid, MIN(rank) AS rank
+            FROM search_matches
+            GROUP BY rowid
+        )
+        "#,
+    );
+
+    SearchMatchSql { cte, params }
+}
+
+fn should_use_like_fallback(query: &str) -> bool {
+    let trimmed = query.trim();
+    !trimmed.is_empty()
+        && (trimmed.chars().filter(|ch| !ch.is_whitespace()).count() < 3
+            || trimmed.chars().any(is_cjk_character))
+}
+
+fn is_cjk_character(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x2CEB0..=0x2EBEF
+    )
 }
