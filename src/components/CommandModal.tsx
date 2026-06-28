@@ -4,6 +4,7 @@ import { tauriApi } from "../api/tauriApi";
 import type { FileRecord } from "../types/domain";
 import type { Translator, View } from "../types/ui";
 import { cn, emptyState, toneClasses } from "../utils/tw";
+import { readableError } from "../utils/viewHelpers";
 
 export async function activateCommandNavigation({
   standalone,
@@ -39,6 +40,7 @@ export function CommandModal({
   onClose,
   platform,
   t,
+  onError,
   standalone = false
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -47,26 +49,31 @@ export function CommandModal({
   onClose: () => void;
   platform: NodeJS.Platform | "browser";
   t: Translator;
+  onError?: (message: string) => void;
   standalone?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<FileRecord[]>([]);
   const [queryState, setQueryState] = useState<"idle" | "pending" | "done" | "failed">("idle");
+  const [commandError, setCommandError] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const trimmedSearch = search.trim();
   const showResults = trimmedSearch.length > 0 && results.length > 0;
+  const activeResultId = showResults ? `command-result-${activeIndex}` : undefined;
   const locateKey = platform === "darwin" ? "⌥↵" : "Alt↵";
 
   useEffect(() => {
     if (!trimmedSearch) {
       setResults([]);
       setQueryState("idle");
+      setCommandError("");
       setActiveIndex(0);
       return;
     }
 
     let cancelled = false;
     setQueryState("pending");
+    setCommandError("");
     const timer = window.setTimeout(() => {
       tauriApi.searchFiles(trimmedSearch, 12)
         .then((files) => {
@@ -79,6 +86,7 @@ export function CommandModal({
           if (cancelled) return;
           setResults([]);
           setQueryState("failed");
+          setCommandError(t("commandSearchFailed"));
         });
     }, 50);
 
@@ -86,7 +94,7 @@ export function CommandModal({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trimmedSearch]);
+  }, [t, trimmedSearch]);
 
   const visibleResults = useMemo(() => results.slice(0, 12), [results]);
 
@@ -101,7 +109,9 @@ export function CommandModal({
         onClose
       });
     } catch (error) {
-      console.error("Failed to activate search result.", error);
+      const message = readableError(error);
+      setCommandError(message);
+      onError?.(message);
     }
   }
 
@@ -109,7 +119,9 @@ export function CommandModal({
     try {
       await tauriApi.revealInFolder(file.path);
     } catch (error) {
-      console.error("Failed to reveal file in folder.", error);
+      const message = readableError(error);
+      setCommandError(message);
+      onError?.(message);
     }
   }
 
@@ -124,7 +136,9 @@ export function CommandModal({
         onClose
       });
     } catch (error) {
-      console.error("Failed to activate search result.", error);
+      const message = readableError(error);
+      setCommandError(message);
+      onError?.(message);
     }
   }
 
@@ -162,7 +176,7 @@ export function CommandModal({
           }
           if (event.key === "ArrowDown") {
             event.preventDefault();
-            setActiveIndex((index) => Math.min(index + 1, visibleResults.length - 1));
+            setActiveIndex((index) => Math.min(index + 1, Math.max(0, visibleResults.length - 1)));
           }
           if (event.key === "ArrowUp") {
             event.preventDefault();
@@ -188,6 +202,10 @@ export function CommandModal({
           <Search className="text-blue-500" size={20} strokeWidth={2.2} />
           <input
             ref={inputRef}
+            role="combobox"
+            aria-expanded={showResults}
+            aria-controls="command-results"
+            aria-activedescendant={activeResultId}
             value={search}
             placeholder={t("commandPlaceholder")}
             onChange={(event) => setSearch(event.target.value)}
@@ -205,13 +223,16 @@ export function CommandModal({
           <div className="grid gap-0">
             <div className="px-3 py-3">
               <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--quiet)]">{t("smartMatches")}</div>
-              <div className="grid gap-1">
+              <div id="command-results" role="listbox" className="grid gap-1">
                 {visibleResults.map((file, index) => {
                   const tone = getResultTone(file);
                   const extension = file.extension ? file.extension.replace(".", "").toUpperCase() : file.file_type;
                   return (
                     <button
                       key={file.id}
+                      id={`command-result-${index}`}
+                      role="option"
+                      aria-selected={index === activeIndex}
                       className={cn(
                         "grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-3 py-3 text-left transition",
                         index === activeIndex ? "bg-white/60 shadow-sm dark:bg-white/10" : "hover:bg-white/30 dark:hover:bg-white/10"
@@ -249,9 +270,19 @@ export function CommandModal({
             </div>
           </div>
         )}
+        {trimmedSearch && queryState === "pending" && (
+          <div className="px-4 pb-4">
+            <div className={cn(emptyState, "min-h-20")}>{t("commandSearching")}</div>
+          </div>
+        )}
+        {trimmedSearch && queryState === "failed" && (
+          <div className="px-4 pb-4">
+            <div className={cn(emptyState, "min-h-20")}>{commandError || t("commandSearchFailed")}</div>
+          </div>
+        )}
         {trimmedSearch && queryState === "done" && !results.length && (
           <div className="px-4 pb-4">
-            <div className={cn(emptyState, "min-h-20")}>{t("noOperations")}</div>
+            <div className={cn(emptyState, "min-h-20")}>{t("commandNoResults")}</div>
           </div>
         )}
       </div>

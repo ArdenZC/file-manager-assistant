@@ -1,19 +1,20 @@
 import { useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
-import { Check, File, FolderOpen } from "lucide-react";
+import { Check, File, FolderOpen, FolderSearch, Layers } from "lucide-react";
 import {
   useChromeContext,
   useRulesContext
 } from "../../contexts/AppContexts";
 import { useFileLibraryStore } from "../../store/useFileLibraryStore";
 import { useOperationQueueStore } from "../../store/useOperationQueueStore";
+import { useScanManagerStore } from "../../store/useScanManagerStore";
 import type { FileRecord } from "../../types/domain";
 import type { Translator, View } from "../../types/ui";
 import { formatBytes } from "../../utils/format";
 import { libraryScopeLabel } from "../../utils/viewHelpers";
 import { shouldVirtualizeList } from "../../utils/virtualization";
-import { cn, emptyState, glassButtonPrimary, toneClasses, virtualList, virtualRow as virtualRowClass, virtualSpacer } from "../../utils/tw";
+import { cn, emptyState, glassButton, glassButtonPrimary, toneClasses, virtualList, virtualRow as virtualRowClass, virtualSpacer } from "../../utils/tw";
 import { revealFileFromCard } from "../shared/cardActions";
 import { compactRowSurface, itemMotion, listMotion, mutedText, panelSurface, rowSurface } from "../shared/ui";
 
@@ -51,6 +52,8 @@ export function HubView() {
   const { t, setView, onError } = useChromeContext();
   const files = useFileLibraryStore((state) => state.libraryPage.files);
   const scope = useFileLibraryStore((state) => state.scope);
+  const setScope = useFileLibraryStore((state) => state.setScope);
+  const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
   const { rules } = useRulesContext();
   const runDispatch = useOperationQueueStore((state) => state.runDispatch);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -65,9 +68,10 @@ export function HubView() {
   ] satisfies Array<{ key: HubBucketKey; label: string; description: string; tone: string }>, [t]);
   const bucketedFiles = useMemo(() => groupFilesByHubBucket(sortedFiles), [sortedFiles]);
   const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
+  const isEmptyCurrentScanScope = scope.kind === "current_scan" && scope.roots.length === 0;
 
   async function dispatchFiles() {
-    if (isDispatching || !files.length) return;
+    if (isDispatching) return;
     setIsDispatching(true);
     try {
       await runDispatch();
@@ -76,6 +80,29 @@ export function HubView() {
     } catch {
       setIsDispatching(false);
     }
+  }
+
+  if (isEmptyCurrentScanScope) {
+    return (
+      <div className={cn(panelSurface, "grid h-full place-items-center")}>
+        <div className={cn(emptyState, "grid min-h-72 w-full place-items-center gap-4 px-6 text-center")}>
+          <div>
+            <strong className="block text-base text-[var(--ink)]">{t("noOrganizeScopeTitle")}</strong>
+            <span className="mt-2 block max-w-xl text-sm text-[var(--muted)]">{t("noOrganizeScopeDesc")}</span>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            <button className={glassButtonPrimary} onClick={() => void handleChooseFolders()}>
+              <FolderSearch size={16} />
+              <span>{t("chooseFolderScan")}</span>
+            </button>
+            <button className={glassButton} onClick={() => setScope({ kind: "all" })}>
+              <Layers size={16} />
+              <span>{t("viewAllIndexedFiles")}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -93,7 +120,7 @@ export function HubView() {
           whileTap={{ scale: 0.985 }}
           className={cn(glassButtonPrimary, "w-full")}
           onClick={dispatchFiles}
-          disabled={isDispatching || !files.length}
+          disabled={isDispatching}
           title={`${activeRuleCount} active rules`}
         >
           {isDispatching ? t("dispatching") : t("runDispatch")}

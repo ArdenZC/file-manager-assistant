@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderPlus, Play, Trash2 } from "lucide-react";
+import { FolderPlus, Keyboard, Play, Trash2 } from "lucide-react";
 import { useChromeContext, useSettingsContext } from "../../contexts/AppContexts";
 import {
   removeDefaultScanRoot,
@@ -8,8 +8,9 @@ import {
   upsertDefaultScanRoot
 } from "../../hooks/useAppSettings";
 import { useScanManagerStore } from "../../store/useScanManagerStore";
+import { useAppStore } from "../../store/useAppStore";
 import type { CloseBehavior, FolderNamingLanguage, RestoreRetentionDays, ScanRootSetting } from "../../types/domain";
-import { defaultPlatformAccelerator } from "../../utils/viewHelpers";
+import { acceleratorFromKeyboardEvent, formatHotkeyLabel, isValidSearchHotkey } from "../../utils/hotkeys";
 import { cn, statusToast } from "../../utils/tw";
 import { mutedText, pageSurface, panelSurface, quietText, segmented, segmentButton, sourceBadge, toggleSwitch, SectionTitle } from "../shared/ui";
 
@@ -29,16 +30,20 @@ export function SettingsView() {
       folderNamingLanguage,
       defaultScanFolders,
       restoreRetentionDays,
-      launchAtLogin
+      launchAtLogin,
+      searchHotkey
     },
     setFolderNamingLanguage,
     setDefaultScanFolders,
     setRestoreRetentionDays,
-    setLaunchAtLogin
+    setLaunchAtLogin,
+    setSearchHotkey
   } = useSettingsContext();
   const scanPath = useScanManagerStore((state) => state.scanPath);
-  const hotkey = defaultPlatformAccelerator(platform);
+  const globalHotkeyError = useAppStore((state) => state.globalHotkeyError);
+  const hotkey = formatHotkeyLabel(searchHotkey, platform);
   const [settingsStatus, setSettingsStatus] = useState("");
+  const [isRecordingHotkey, setIsRecordingHotkey] = useState(false);
 
   async function updateCloseBehavior(next: CloseBehavior) {
     const saved = await setCloseBehavior(next);
@@ -101,6 +106,35 @@ export function SettingsView() {
     }
   }
 
+  async function updateSearchHotkey(next: string) {
+    if (!isValidSearchHotkey(next)) {
+      setSettingsStatus(t("hotkeyInvalid"));
+      return;
+    }
+
+    const saved = await setSearchHotkey(next);
+    if (saved) {
+      setSettingsStatus(`${t("hotkeySaved")} · ${t("hotkeyRestartHint")}`);
+      setIsRecordingHotkey(false);
+    }
+  }
+
+  function handleHotkeyRecording(event: KeyboardEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      setIsRecordingHotkey(false);
+      return;
+    }
+
+    const accelerator = acceleratorFromKeyboardEvent(event.nativeEvent, platform);
+    if (!accelerator) {
+      setSettingsStatus(t("hotkeyInvalid"));
+      return;
+    }
+    void updateSearchHotkey(accelerator);
+  }
+
   return (
     <div className={cn(pageSurface, "grid grid-cols-[minmax(0,1fr)_minmax(300px,0.7fr)] gap-4 overflow-hidden")}>
       <section className={cn(panelSurface, "overflow-auto")}>
@@ -158,9 +192,36 @@ export function SettingsView() {
           </div>
           <span className={quietText}>{t("defaultScanFoldersRestartHint")}</span>
         </div>
-        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
-          <div><strong className="block text-sm">{t("searchHotkey")}</strong><span className={mutedText}>{t("searchHotkeyDesc")}</span></div>
-          <span className="rounded-xl border border-[var(--line)] bg-white/25 px-3 py-1.5 text-sm font-medium text-[var(--ink)] dark:bg-white/5">{hotkey}</span>
+        <div className="grid gap-3 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div className="flex items-center justify-between gap-4">
+            <div><strong className="block text-sm">{t("searchHotkey")}</strong><span className={mutedText}>{t("searchHotkeyDesc")}</span></div>
+            <span className="rounded-xl border border-[var(--line)] bg-white/25 px-3 py-1.5 text-sm font-medium text-[var(--ink)] dark:bg-white/5">{hotkey}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className={segmentButton(isRecordingHotkey)} onClick={() => setIsRecordingHotkey(true)}>
+              <Keyboard size={14} />
+              <span>{t("changeHotkey")}</span>
+            </button>
+            {["CmdOrCtrl+K", "CmdOrCtrl+Shift+K", "Alt+Space", "CmdOrCtrl+Alt+Space"].map((accelerator) => (
+              <button
+                className={segmentButton(searchHotkey === accelerator)}
+                key={accelerator}
+                onClick={() => void updateSearchHotkey(accelerator)}
+              >
+                {formatHotkeyLabel(accelerator, platform)}
+              </button>
+            ))}
+          </div>
+          {isRecordingHotkey && (
+            <div
+              className="rounded-xl border border-dashed border-blue-400/60 bg-blue-500/10 px-3 py-3 text-sm text-blue-700 outline-none dark:text-blue-200"
+              tabIndex={0}
+              onKeyDown={handleHotkeyRecording}
+            >
+              {t("recordingHotkey")}
+            </div>
+          )}
+          <span className={quietText}>{globalHotkeyError ? t("hotkeyConflictHint") : t("hotkeyRestartHint")}</span>
         </div>
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
           <div><strong className="block text-sm">{t("launchAtLogin")}</strong><span className={mutedText}>{t("launchAtLoginDesc")}</span></div>

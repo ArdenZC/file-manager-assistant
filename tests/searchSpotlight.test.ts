@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { activateCommandNavigation } from "../src/components/CommandModal";
 import { applySearchNavigation } from "../src/utils/searchNavigation";
-import { defaultPlatformAccelerator } from "../src/utils/viewHelpers";
+import { DEFAULT_SEARCH_HOTKEY, formatHotkeyLabel } from "../src/utils/hotkeys";
 
 describe("spotlight search navigation", () => {
   it("displays the registered global shortcut for each platform", () => {
-    expect(defaultPlatformAccelerator("darwin")).toBe("⌘⇧Space");
-    expect(defaultPlatformAccelerator("win32")).toBe("Ctrl+Shift+Space");
-    expect(defaultPlatformAccelerator("linux")).toBe("Ctrl+Shift+Space");
+    expect(DEFAULT_SEARCH_HOTKEY).toBe("CmdOrCtrl+K");
+    expect(formatHotkeyLabel(DEFAULT_SEARCH_HOTKEY, "darwin")).toBe("⌘ K");
+    expect(formatHotkeyLabel(DEFAULT_SEARCH_HOTKEY, "win32")).toBe("Ctrl K");
+    expect(formatHotkeyLabel(DEFAULT_SEARCH_HOTKEY, "linux")).toBe("Ctrl K");
   });
 
   it("activates standalone search results through the backend command", async () => {

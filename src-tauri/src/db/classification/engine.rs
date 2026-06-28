@@ -24,10 +24,20 @@ impl Database {
         scope: &LibraryScope,
         rules: Vec<Rule>,
     ) -> Result<RuleExecutionSummary, DbError> {
+        self.execute_rules_for_scope_with_mode(scope, rules, RuleExecutionMode::InboxOnly)
+    }
+
+    pub fn execute_rules_for_scope_with_mode(
+        &self,
+        scope: &LibraryScope,
+        rules: Vec<Rule>,
+        mode: RuleExecutionMode,
+    ) -> Result<RuleExecutionSummary, DbError> {
         let settings = crate::settings::get_app_settings(self)?;
         self.execute_rules_for_scope_with_folder_naming_language(
             scope,
             rules,
+            mode,
             &settings.folder_naming_language,
         )
     }
@@ -36,11 +46,16 @@ impl Database {
         &self,
         scope: &LibraryScope,
         rules: Vec<Rule>,
+        mode: RuleExecutionMode,
         folder_naming_language: &str,
     ) -> Result<RuleExecutionSummary, DbError> {
         let all_rules = active_rules(rules);
         let rule_version = classification_version_for_rules(&all_rules, folder_naming_language)?;
         let scoped = scoped_files_sql(Some(scope));
+        let lifecycle_filter = match mode {
+            RuleExecutionMode::InboxOnly => "WHERE f.lifecycle = 'Inbox'",
+            RuleExecutionMode::AllChangedOrRuleChanged => "",
+        };
         let sql = format!(
             r#"
                 WITH {},
@@ -63,10 +78,10 @@ impl Database {
                 LEFT JOIN dup_groups AS dg
                   ON dg.size = f.size
                  AND dg.content_hash = f.content_hash
-                WHERE f.lifecycle = 'Inbox'
+                {}
                 ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
                 "#,
-            scoped.cte
+            scoped.cte, lifecycle_filter
         );
         let read_conn = self.conn()?;
         let mut write_conn = self.conn()?;

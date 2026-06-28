@@ -4,9 +4,9 @@ import { tauriApi } from "../api/tauriApi";
 import type { Rule } from "../types/domain";
 import { readableError } from "../utils/viewHelpers";
 import {
-  classifyFsWatchEvent,
-  eventPaths,
-  mergeWatcherQueues,
+  takeWatcherQueueBatch,
+  WATCHER_QUEUE_BATCH_LIMIT,
+  watcherQueueSnapshotFromEvent,
   type FsWatchEvent
 } from "./fsWatcherQueue";
 
@@ -31,18 +31,29 @@ export function useFsWatcher({ onRefreshData, onError, rules = EMPTY_RULES }: Fs
     const flushQueues = () => {
       queue = queue
         .then(async () => {
-          const snapshot = mergeWatcherQueues(staleQueue, upsertQueue);
-          staleQueue = new Set();
-          upsertQueue = new Set();
+          const snapshot = takeWatcherQueueBatch(staleQueue, upsertQueue, WATCHER_QUEUE_BATCH_LIMIT);
+          if (!snapshot.stale.length && !snapshot.upsert.length) return;
 
           let changed = false;
           if (snapshot.stale.length > 0) {
-            changed = (await tauriApi.markFilesStaleByPaths(snapshot.stale)) > 0 || changed;
+            try {
+              changed = (await tauriApi.markFilesStaleByPaths(snapshot.stale)) > 0 || changed;
+            } catch (error) {
+              if (!disposed) {
+                onError?.(readableError(error));
+              }
+            }
           }
           let upserted = 0;
           if (snapshot.upsert.length > 0) {
-            upserted = await tauriApi.upsertFilesByPaths(snapshot.upsert);
-            changed = upserted > 0 || changed;
+            try {
+              upserted = await tauriApi.upsertFilesByPaths(snapshot.upsert);
+              changed = upserted > 0 || changed;
+            } catch (error) {
+              if (!disposed) {
+                onError?.(readableError(error));
+              }
+            }
           }
           if (upserted > 0 && snapshot.upsert.length > 0) {
             try {
@@ -65,6 +76,11 @@ export function useFsWatcher({ onRefreshData, onError, rules = EMPTY_RULES }: Fs
           if (!disposed) {
             onError?.(readableError(error));
           }
+        })
+        .finally(() => {
+          if (!disposed && (staleQueue.size > 0 || upsertQueue.size > 0)) {
+            scheduleFlush();
+          }
         });
     };
 
@@ -82,18 +98,15 @@ export function useFsWatcher({ onRefreshData, onError, rules = EMPTY_RULES }: Fs
       const payload = event.payload;
       if (!payload) return;
 
-      const paths = eventPaths(payload);
-      if (!paths.length) return;
-      const action = classifyFsWatchEvent(payload);
-      if (action === "ignore") return;
+      const snapshot = watcherQueueSnapshotFromEvent(payload);
+      if (!snapshot.stale.length && !snapshot.upsert.length) return;
 
-      for (const path of paths) {
-        if (action === "stale") {
-          staleQueue.add(path);
-        } else {
-          upsertQueue.add(path);
-          staleQueue.delete(path);
-        }
+      for (const path of snapshot.stale) {
+        staleQueue.add(path);
+      }
+      for (const path of snapshot.upsert) {
+        upsertQueue.add(path);
+        staleQueue.delete(path);
       }
       scheduleFlush();
     });

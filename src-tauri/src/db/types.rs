@@ -125,6 +125,46 @@ pub struct PagedFilesResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OperationPreviewDto {
+    pub id: String,
+    #[serde(rename = "fileId")]
+    pub file_id: String,
+    pub operation_type: String,
+    pub source_path: String,
+    pub target_path: String,
+    pub old_name: String,
+    pub new_name: String,
+    pub status: String,
+    pub risk_level: String,
+    pub confidence: f64,
+    pub requires_confirmation: bool,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_by_default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_executable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable_new_name: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_parent_exists: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub will_create_parent: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationPreviewScopeResult {
+    pub previews: Vec<OperationPreviewDto>,
+    pub total: i64,
+    pub limit: u32,
+    pub offset: u32,
+    pub truncated: bool,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsSummary {
     pub total_files: i64,
@@ -209,6 +249,19 @@ pub struct RuleExecutionSummary {
     pub needs_confirmation: i64,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleExecutionMode {
+    InboxOnly,
+    AllChangedOrRuleChanged,
+}
+
+impl Default for RuleExecutionMode {
+    fn default() -> Self {
+        Self::InboxOnly
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchIndexOptimizeReport {
@@ -232,6 +285,22 @@ pub enum LibraryScope {
         roots: Vec<String>,
     },
     All,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileLibraryFilter {
+    #[serde(default)]
+    pub library_filter: Option<LibraryFilter>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryFilter {
+    All,
+    Active,
+    Archive,
+    Review,
 }
 
 pub(crate) struct RuleSqlRow {

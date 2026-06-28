@@ -73,7 +73,12 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     useScanManagerStore.getState().setDefaultScanRoots(appSettings.defaultScanFolders);
   }, [appSettings.defaultScanFolders]);
 
-  const appChrome = useAppChrome({ theme, setTheme, setLanguage });
+  const appChrome = useAppChrome({
+    theme,
+    setTheme,
+    setLanguage,
+    searchHotkey: appSettings.searchHotkey
+  });
   const {
     commandInputRef,
     isCommandOpen,
@@ -103,6 +108,25 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
       unlisten?.();
     };
   }, [setView, showError]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void tauriApi.onGlobalHotkeyRegistrationFailed((payload) => {
+      useAppStore.getState().setGlobalHotkeyError(payload.message);
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    }).catch((error) => {
+      if (!disposed) showError(readableError(error));
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [showError]);
 
   const setCloseBehavior = useCallback(
     async (next: CloseBehavior) => {
@@ -136,6 +160,13 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     async (next: boolean) => {
       const savedSettings = await updateSettings({ launchAtLogin: next });
       return savedSettings.launchAtLogin === next;
+    },
+    [updateSettings]
+  );
+  const setSearchHotkey = useCallback(
+    async (next: string) => {
+      const savedSettings = await updateSettings({ searchHotkey: next });
+      return savedSettings.searchHotkey === next;
     },
     [updateSettings]
   );
@@ -202,7 +233,8 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     setFolderNamingLanguage,
     setDefaultScanFolders,
     setRestoreRetentionDays,
-    setLaunchAtLogin
+    setLaunchAtLogin,
+    setSearchHotkey
   }), [
     appSettings,
     isLoadingSettings,
@@ -210,7 +242,8 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     setFolderNamingLanguage,
     setDefaultScanFolders,
     setRestoreRetentionDays,
-    setLaunchAtLogin
+    setLaunchAtLogin,
+    setSearchHotkey
   ]);
   const rulesContextValue = useMemo(() => ({
     rules,
@@ -279,20 +312,14 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
 }
 
 function StoreRuntimeBootstrapper() {
-  const files = useFileLibraryStore((state) => state.libraryPage.files);
   const initializeScanListeners = useScanManagerStore((state) => state.initializeScanListeners);
   const initializeOperationQueue = useOperationQueueStore((state) => state.initializeOperationQueue);
-  const syncPreviews = useOperationQueueStore((state) => state.syncPreviews);
 
   useEffect(() => {
     void useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery);
     void initializeScanListeners();
     void initializeOperationQueue();
   }, [initializeOperationQueue, initializeScanListeners]);
-
-  useEffect(() => {
-    syncPreviews(files);
-  }, [files, syncPreviews]);
 
   return null;
 }

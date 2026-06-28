@@ -11,6 +11,7 @@ use tauri_plugin_autostart::{AutoLaunchManager, ManagerExt};
 use thiserror::Error;
 
 pub const APP_SETTINGS_KEY: &str = "app_settings_v1";
+pub const DEFAULT_SEARCH_HOTKEY: &str = "CmdOrCtrl+K";
 const DEFAULT_SCAN_ROOT_CREATED_AT: &str = "1970-01-01T00:00:00.000Z";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,6 +36,8 @@ pub struct AppSettings {
     pub default_scan_folders: Vec<ScanRootSetting>,
     pub restore_retention_days: i64,
     pub launch_at_login: bool,
+    #[serde(default = "default_search_hotkey")]
+    pub search_hotkey: String,
 }
 
 impl Default for AppSettings {
@@ -45,6 +48,7 @@ impl Default for AppSettings {
             default_scan_folders: default_scan_roots(),
             restore_retention_days: 30,
             launch_at_login: false,
+            search_hotkey: DEFAULT_SEARCH_HOTKEY.to_string(),
         }
     }
 }
@@ -94,6 +98,10 @@ where
 
 fn default_scan_roots() -> Vec<ScanRootSetting> {
     default_scan_roots_for_home(dirs::home_dir().as_deref())
+}
+
+fn default_search_hotkey() -> String {
+    DEFAULT_SEARCH_HOTKEY.to_string()
 }
 
 fn default_scan_roots_for_home(home: Option<&Path>) -> Vec<ScanRootSetting> {
@@ -172,6 +180,9 @@ fn normalized_app_settings(settings: &AppSettings) -> AppSettings {
         .unwrap_or_default();
     let mut next = settings.clone();
     next.default_scan_folders = scan_roots_from_values(values, dirs::home_dir().as_deref());
+    if next.search_hotkey.trim().is_empty() {
+        next.search_hotkey = default_search_hotkey();
+    }
     next
 }
 

@@ -1,11 +1,14 @@
 import { memo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Trash2 } from "lucide-react";
+import { tauriApi } from "../../api/tauriApi";
 import { useChromeContext, useRulesContext } from "../../contexts/AppContexts";
+import { useAppStore } from "../../store/useAppStore";
+import { useFileLibraryStore } from "../../store/useFileLibraryStore";
 import type { Lifecycle, Purpose, Rule, RuleCondition, RuleConditionGroup, RuleOperator } from "../../types/domain";
 import type { Translator } from "../../types/ui";
-import { nowIso } from "../../utils/viewHelpers";
+import { nowIso, readableError } from "../../utils/viewHelpers";
 import { shouldVirtualizeList } from "../../utils/virtualization";
 import { cn, glassButton, glassButtonPrimary, inputSurface, selectSurface, virtualList, virtualRow as virtualRowClass, virtualSpacer } from "../../utils/tw";
 import { compactRowSurface, formGrid, itemMotion, listMotion, pageSurface, panelSurface, quietText, segmented, segmentButton, sourceBadge, toggleSwitch, SectionTitle } from "../shared/ui";
@@ -23,7 +26,7 @@ import {
 const RULE_ROW_HEIGHT = 68;
 
 export function RulesView() {
-  const { t } = useChromeContext();
+  const { t, onError } = useChromeContext();
   const {
     rules,
     saveRule: onSave,
@@ -36,6 +39,8 @@ export function RulesView() {
   const [purpose, setPurpose] = useState<Purpose>("Temporary");
   const [lifecycle, setLifecycle] = useState<Lifecycle>("Inbox");
   const [weight, setWeight] = useState(76);
+  const [isReapplyingRules, setIsReapplyingRules] = useState(false);
+  const [reapplyStatus, setReapplyStatus] = useState("");
 
   function updateGroupOperator(groupId: string, nextOperator: RuleOperator) {
     setGroups((current) =>
@@ -99,6 +104,29 @@ export function RulesView() {
       weight,
       now
     }));
+  }
+
+  async function reapplyRulesToCurrentScope() {
+    if (isReapplyingRules) return;
+    setIsReapplyingRules(true);
+    setReapplyStatus("");
+
+    try {
+      const scope = useFileLibraryStore.getState().scope;
+      const summary = await tauriApi.executeRulesForScope(
+        scope,
+        rules,
+        "all_changed_or_rule_changed"
+      );
+      await useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery);
+      setReapplyStatus(
+        `${t("rulesReapplied")}: ${summary.updated.toLocaleString()} / ${summary.scanned.toLocaleString()} (${t("skipped")}: ${summary.skipped.toLocaleString()})`
+      );
+    } catch (error) {
+      onError(readableError(error));
+    } finally {
+      setIsReapplyingRules(false);
+    }
   }
 
   return (
@@ -214,6 +242,22 @@ export function RulesView() {
 
       <section className={cn(panelSurface, "overflow-hidden")}>
         <SectionTitle title={t("strategy")} body={t("ruleLayerDesc")} />
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] bg-white/25 p-3 dark:bg-white/5">
+          <div>
+            <strong className="block text-sm">{t("reapplyRules")}</strong>
+            <span className={quietText}>{t("reapplyRulesDesc")}</span>
+          </div>
+          <button
+            type="button"
+            className={glassButton}
+            disabled={isReapplyingRules}
+            onClick={reapplyRulesToCurrentScope}
+          >
+            <RefreshCw size={15} className={cn(isReapplyingRules && "animate-spin")} />
+            {t("reapplyRules")}
+          </button>
+          {reapplyStatus ? <span className={cn(quietText, "basis-full")}>{reapplyStatus}</span> : null}
+        </div>
         <VirtualRuleList
           rules={rules}
           onToggleRuleEnabled={onToggleRuleEnabled}

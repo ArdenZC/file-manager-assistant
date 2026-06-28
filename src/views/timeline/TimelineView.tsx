@@ -17,11 +17,17 @@ import { PreviewFileRow } from "./PreviewFileRow";
 const PREVIEW_ROW_HEIGHT = 156;
 
 export function TimelineView() {
-  const { t } = useChromeContext();
+  const { t, setView } = useChromeContext();
   const scope = useFileLibraryStore((state) => state.scope);
   const previews = useOperationQueueStore((state) => state.displayPreviews);
+  const previewScope = useOperationQueueStore((state) => state.previewScope);
+  const previewTotal = useOperationQueueStore((state) => state.previewTotal);
+  const previewLimit = useOperationQueueStore((state) => state.previewLimit);
+  const previewTruncated = useOperationQueueStore((state) => state.previewTruncated);
+  const previewHasMore = useOperationQueueStore((state) => state.previewHasMore);
   const selectedIds = useOperationQueueStore((state) => state.selectedOperationIds);
   const setSelectedIds = useOperationQueueStore((state) => state.setSelectedOperationIds);
+  const loadMorePreviews = useOperationQueueStore((state) => state.loadMorePreviews);
   const onRenamePreview = useOperationQueueStore((state) => state.onRenamePreview);
   const executeSelected = useOperationQueueStore((state) => state.executeSelected);
   const operationProgress = useOperationQueueStore((state) => state.operationProgress);
@@ -39,9 +45,12 @@ export function TimelineView() {
   const groups = groupOperationPreviews(previews, t);
   const executableCount = previews.filter((preview) => preview.is_executable !== false).length;
   const blockedCount = previews.length - executableCount;
+  const confirmationCount = previews.filter((preview) => preview.requires_confirmation).length;
+  const autoCreateParentCount = previews.filter((preview) => preview.will_create_parent).length;
   const executeProgress = operationProgress?.kind === "execute" ? operationProgress : null;
   const isExecuting = Boolean(executeProgress);
-  const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
+  const scopeText = libraryScopeLabel(previewScope ?? scope, t("allIndexedFiles"), t("noFolderSelected"));
+  const coveredTotal = previewTotal || previews.length;
 
   return (
     <div className={pageSurface}>
@@ -57,11 +66,25 @@ export function TimelineView() {
             <span>{isExecuting ? t("executingOperations") : t("executeSelected")} / {selectedIds.size}</span>
           </button>
         </div>
-        <div className="mb-4 grid gap-2 text-sm text-[var(--muted)] sm:grid-cols-3">
+        <div className="mb-4 grid gap-2 text-sm text-[var(--muted)] sm:grid-cols-5">
+          <span>{t("previewScopeItems")}: <strong>{coveredTotal.toLocaleString()}</strong></span>
           <span>{t("previewMainFolders")}: <strong>{groups.length}</strong></span>
           <span>{t("executableItems")}: <strong>{executableCount}</strong></span>
           <span>{t("blockedItems")}: <strong>{blockedCount}</strong></span>
+          <span>{t("confirmationItems")}: <strong>{confirmationCount}</strong></span>
         </div>
+        {previewTruncated && (
+          <div className="mb-4 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-200">
+            {t("previewTruncatedWarning")
+              .replace("{limit}", previewLimit.toLocaleString())
+              .replace("{total}", coveredTotal.toLocaleString())}
+          </div>
+        )}
+        {autoCreateParentCount > 0 && (
+          <div className="mb-4 rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-700 dark:text-blue-200">
+            {t("autoCreateFolderHint").replace("{count}", autoCreateParentCount.toLocaleString())}
+          </div>
+        )}
         {executeProgress && (
           <OperationProgressPanel
             progress={executeProgress}
@@ -71,7 +94,20 @@ export function TimelineView() {
           />
         )}
         {!previews.length ? (
-          <div className={emptyState}>{t("noOperations")}</div>
+          <div className={cn(emptyState, "grid min-h-48 place-items-center gap-4 px-6 text-center")}>
+            <div>
+              <strong className="block text-base text-[var(--ink)]">{t("previewEmptyTitle")}</strong>
+              <span className="mt-2 block max-w-xl text-sm text-[var(--muted)]">{t("previewEmptyDesc")}</span>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button className={glassButtonPrimary} onClick={() => setView("organize")}>
+                {t("goSmartDispatch")}
+              </button>
+              <button className={glassButton} onClick={() => setView("rules")}>
+                {t("goRuleEngine")}
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="grid gap-4">
             {groups.map((group) => {
@@ -124,6 +160,11 @@ export function TimelineView() {
                 </section>
               );
             })}
+            {previewHasMore && (
+              <button className={glassButton} onClick={loadMorePreviews}>
+                {t("loadMoreFiles").replace("{count}", Math.max(0, coveredTotal - previews.length).toLocaleString())}
+              </button>
+            )}
           </div>
         )}
       </section>

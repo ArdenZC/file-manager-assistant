@@ -115,6 +115,69 @@
         .expect("set lifecycle");
     }
 
+    fn set_file_review_state(
+        db: &Database,
+        path: &str,
+        lifecycle: &str,
+        suggested_action: &str,
+        requires_confirmation: bool,
+    ) {
+        let conn = Connection::open(db.path()).expect("open migrated database");
+        conn.execute(
+            r#"
+            UPDATE files
+            SET lifecycle = ?2,
+                suggested_action = ?3,
+                requires_confirmation = ?4
+            WHERE path = ?1
+            "#,
+            params![
+                path,
+                lifecycle,
+                suggested_action,
+                if requires_confirmation { 1 } else { 0 }
+            ],
+        )
+        .expect("set file review state");
+    }
+
+    fn set_file_operation_suggestion(
+        db: &Database,
+        path: &str,
+        suggested_action: &str,
+        suggested_target_path: &str,
+        suggested_name: &str,
+        risk_level: &str,
+        confidence: f64,
+        requires_confirmation: bool,
+    ) {
+        let conn = Connection::open(db.path()).expect("open migrated database");
+        conn.execute(
+            r#"
+            UPDATE files
+            SET suggested_action = ?2,
+                suggested_target_path = ?3,
+                suggested_name = ?4,
+                risk_level = ?5,
+                confidence = ?6,
+                requires_confirmation = ?7,
+                classification_reason = 'test suggestion',
+                classification_status = 'classified'
+            WHERE path = ?1
+            "#,
+            params![
+                path,
+                suggested_action,
+                suggested_target_path,
+                suggested_name,
+                risk_level,
+                confidence,
+                if requires_confirmation { 1 } else { 0 }
+            ],
+        )
+        .expect("set file operation suggestion");
+    }
+
     fn set_file_mtime(db: &Database, path: &str, mtime: i64) {
         let conn = Connection::open(db.path()).expect("open migrated database");
         conn.execute(

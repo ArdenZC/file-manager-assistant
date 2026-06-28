@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { Language } from "../i18n";
 import type { ThemeMode } from "../types/ui";
+import { formatHotkeyLabel, matchesAcceleratorEvent } from "../utils/hotkeys";
 import {
   detectBrowserPlatform,
-  defaultPlatformAccelerator,
   preferredLanguage,
   preferredTheme,
   prefersDarkScheme
@@ -15,16 +15,17 @@ interface UseAppChromeOptions {
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
   setLanguage: (language: Language) => void;
+  searchHotkey: string;
 }
 
-export function useAppChrome({ theme, setTheme, setLanguage }: UseAppChromeOptions) {
+export function useAppChrome({ theme, setTheme, setLanguage, searchHotkey }: UseAppChromeOptions) {
   const [systemDark, setSystemDark] = useState(() => prefersDarkScheme());
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const platform = detectBrowserPlatform();
   const isWindows = platform === "win32";
   const effectiveTheme: Exclude<ThemeMode, "system"> = theme === "system" ? (systemDark ? "dark" : "light") : theme;
-  const hotkeyLabel = defaultPlatformAccelerator(platform);
+  const hotkeyLabel = formatHotkeyLabel(searchHotkey, platform);
 
   useEffect(() => {
     document.documentElement.classList.toggle("search-window-root", IS_SEARCH_MODE);
@@ -62,7 +63,7 @@ export function useAppChrome({ theme, setTheme, setLanguage }: UseAppChromeOptio
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if (matchesAcceleratorEvent(event, searchHotkey, platform)) {
         event.preventDefault();
         setIsCommandOpen(true);
       }
@@ -70,7 +71,7 @@ export function useAppChrome({ theme, setTheme, setLanguage }: UseAppChromeOptio
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [platform, searchHotkey]);
 
   useEffect(() => {
     if (isCommandOpen) window.setTimeout(() => commandInputRef.current?.focus(), 40);

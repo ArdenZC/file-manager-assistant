@@ -5,13 +5,16 @@ import type {
   DashboardStats,
   ExecuteOperationRequest,
   ExecuteOperationResult,
+  FileLibraryFilters,
   FileQueryResult,
   FileRecord,
   LibraryScope,
   OperationLog,
   OperationPreview,
+  OperationPreviewResult,
   RestoreMovesResult,
-  Rule
+  Rule,
+  RuleExecutionMode
 } from "../types/domain";
 import type { View } from "../types/ui";
 import type { SearchNavigatePayload } from "../utils/searchNavigation";
@@ -53,6 +56,10 @@ export interface OperationProgressPayload {
   currentPath: string;
 }
 
+export interface GlobalHotkeyErrorPayload {
+  message: string;
+}
+
 export interface RuleExecutionSummary {
   scanned: number;
   updated: number;
@@ -83,13 +90,20 @@ function listenTo<T>(eventName: string, handler: EventHandler<T>): Promise<Unlis
 }
 
 export const tauriApi = {
-  getPagedFiles(limit = 50, offset = 0, query?: string, scope?: LibraryScope): Promise<FileQueryResult> {
+  getPagedFiles(
+    limit = 50,
+    offset = 0,
+    query?: string,
+    scope?: LibraryScope,
+    filters?: FileLibraryFilters
+  ): Promise<FileQueryResult> {
     const normalizedQuery = query?.trim();
     return invokeCommand<FileQueryResult>("get_paged_files", {
       limit,
       offset,
       query: normalizedQuery ? normalizedQuery : null,
-      scope: scope ?? null
+      scope: scope ?? null,
+      filter: filters ?? null
     });
   },
 
@@ -126,6 +140,20 @@ export const tauriApi = {
     return invokeCommand<OperationLog[]>("get_operation_logs", { limit });
   },
 
+  getOperationPreviewsForScope(
+    scope: LibraryScope,
+    filters?: FileLibraryFilters,
+    limit?: number,
+    offset?: number
+  ): Promise<OperationPreviewResult> {
+    return invokeCommand<OperationPreviewResult>("get_operation_previews_for_scope", {
+      scope,
+      filter: filters ?? null,
+      limit,
+      offset
+    });
+  },
+
   revealInFolder(path: string): Promise<void> {
     return invokeCommand<void>("reveal_in_folder", { path });
   },
@@ -138,8 +166,12 @@ export const tauriApi = {
     return invokeCommand<RuleExecutionSummary>("execute_rules_for_paths", { paths, rules });
   },
 
-  executeRulesForScope(scope: LibraryScope, rules: Rule[]): Promise<RuleExecutionSummary> {
-    return invokeCommand<RuleExecutionSummary>("execute_rules_for_scope", { scope, rules });
+  executeRulesForScope(
+    scope: LibraryScope,
+    rules: Rule[],
+    mode: RuleExecutionMode = "inbox_only"
+  ): Promise<RuleExecutionSummary> {
+    return invokeCommand<RuleExecutionSummary>("execute_rules_for_scope", { scope, rules, mode });
   },
 
   getUserRules(): Promise<Rule[]> {
@@ -218,6 +250,10 @@ export const tauriApi = {
 
   onSearchNavigate(handler: EventHandler<SearchNavigatePayload>): Promise<UnlistenFn> {
     return listenTo("search-navigate", handler);
+  },
+
+  onGlobalHotkeyRegistrationFailed(handler: EventHandler<GlobalHotkeyErrorPayload>): Promise<UnlistenFn> {
+    return listenTo("global-hotkey-registration-failed", handler);
   }
 };
 

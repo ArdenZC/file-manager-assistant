@@ -4,7 +4,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command as ProcessCommand,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -35,6 +35,8 @@ enum FileOpError {
     UnsafeFileName,
     #[error("Operation rejected because it touches a protected system location: {0}")]
     ProtectedPath(String),
+    #[error("Target path contains unsafe parent traversal.")]
+    UnsafePathTraversal,
     #[error("File operation failed: {0}")]
     Io(#[from] io::Error),
 }
@@ -331,9 +333,11 @@ fn execute_preview_operation(
     } else {
         match operation.operation_type.as_str() {
             "rename" => rename_file(operation.source_path.clone(), operation.new_name.clone()),
-            "move" | "move_rename" => {
-                move_file(operation.source_path.clone(), operation.target_path.clone())
-            }
+            "move" | "move_rename" => move_file_with_parent_policy(
+                operation.source_path.clone(),
+                operation.target_path.clone(),
+                true,
+            ),
             other => Err(format!("Unsupported operation type: {other}")),
         }
     };
@@ -653,8 +657,21 @@ fn validate_source_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn validate_target_path(path: &Path) -> Result<PathBuf, String> {
+    validate_target_path_with_parent_policy(path, false)
+}
+
+fn validate_target_path_with_parent_policy(
+    path: &Path,
+    allow_create_parent: bool,
+) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(FileOpError::RelativePath.to_string());
+    }
+    if path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return Err(FileOpError::UnsafePathTraversal.to_string());
     }
     if path.exists() {
         return Err(FileOpError::TargetExists.to_string());
@@ -671,11 +688,38 @@ fn validate_target_path(path: &Path) -> Result<PathBuf, String> {
         .parent()
         .ok_or(FileOpError::TargetParentMissing)
         .map_err(|error| error.to_string())?;
+    if !parent.exists() {
+        if !allow_create_parent {
+            return Err(FileOpError::TargetParentMissing.to_string());
+        }
+        ensure_not_protected(parent)?;
+        fs::create_dir_all(parent).map_err(|error| FileOpError::Io(error).to_string())?;
+    }
     let parent = parent
         .canonicalize()
         .map_err(|_| FileOpError::TargetParentMissing.to_string())?;
 
     Ok(parent.join(name))
+}
+
+fn move_file_with_parent_policy(
+    source_path: String,
+    target_path: String,
+    allow_create_parent: bool,
+) -> Result<FileOperationResult, String> {
+    let source = validate_source_path(&PathBuf::from(source_path))?;
+    let target =
+        validate_target_path_with_parent_policy(&PathBuf::from(target_path), allow_create_parent)?;
+
+    ensure_not_protected(&source)?;
+    ensure_not_protected(&target)?;
+    move_file_no_overwrite(&source, &target)?;
+
+    Ok(FileOperationResult {
+        operation: "move".to_string(),
+        source_path: normalize_path(&source),
+        target_path: normalize_path(&target),
+    })
 }
 
 fn validate_safe_file_name(name: &str) -> Result<(), String> {
@@ -940,6 +984,83 @@ mod tests {
         assert_eq!(result.logs[0].status, "success");
         assert_eq!(result.logs[0].operation_type, "move");
         assert_eq!(result.updated_files.len(), 0);
+    }
+
+    #[test]
+    fn execute_moves_core_creates_safe_missing_target_parent() {
+        let root = test_dir();
+        let source_dir = root.join("source");
+        let target_dir = root.join("ZenCanvas").join("20_Areas").join("Projects");
+        fs::create_dir_all(&source_dir).expect("source dir");
+
+        let source = source_dir.join("sample.txt");
+        let target = target_dir.join("sample.txt");
+        fs::write(&source, "hello").expect("write source");
+
+        let result = execute_moves_core(ExecuteMovesRequest {
+            operations: vec![OperationPreviewRequest {
+                id: "op-create-parent".to_string(),
+                file_id: "file-create-parent".to_string(),
+                operation_type: "move".to_string(),
+                source_path: source.to_string_lossy().into_owned(),
+                target_path: target.to_string_lossy().into_owned(),
+                old_name: "sample.txt".to_string(),
+                new_name: "sample.txt".to_string(),
+                is_executable: Some(true),
+            }],
+        });
+
+        assert!(!source.exists());
+        assert!(target.exists());
+        assert_eq!(fs::read_to_string(&target).expect("read target"), "hello");
+        assert_eq!(result.logs[0].status, "success");
+        assert_eq!(
+            result.logs[0].source_path,
+            source.to_string_lossy().into_owned()
+        );
+        assert!(result.logs[0]
+            .target_path
+            .replace('\\', "/")
+            .ends_with("ZenCanvas/20_Areas/Projects/sample.txt"));
+    }
+
+    #[test]
+    fn execute_moves_core_refuses_to_overwrite_existing_target() {
+        let root = test_dir();
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&target_dir).expect("target dir");
+
+        let source = source_dir.join("sample.txt");
+        let target = target_dir.join("sample.txt");
+        fs::write(&source, "hello").expect("write source");
+        fs::write(&target, "existing").expect("write existing target");
+
+        let result = execute_moves_core(ExecuteMovesRequest {
+            operations: vec![OperationPreviewRequest {
+                id: "op-no-overwrite".to_string(),
+                file_id: "file-no-overwrite".to_string(),
+                operation_type: "move".to_string(),
+                source_path: source.to_string_lossy().into_owned(),
+                target_path: target.to_string_lossy().into_owned(),
+                old_name: "sample.txt".to_string(),
+                new_name: "sample.txt".to_string(),
+                is_executable: Some(true),
+            }],
+        });
+
+        assert!(source.exists());
+        assert_eq!(
+            fs::read_to_string(&target).expect("read target"),
+            "existing"
+        );
+        assert_eq!(result.logs[0].status, "failed");
+        assert!(result.logs[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Target file already exists"));
     }
 
     #[test]

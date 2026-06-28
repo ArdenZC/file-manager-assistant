@@ -10,11 +10,13 @@ interface AppStore {
   theme: ThemeMode;
   view: View;
   searchQuery: string;
+  globalHotkeyError: string;
   toast: ToastState | null;
   setLanguage: (language: Language) => void;
   setTheme: (theme: ThemeMode) => void;
   setView: (view: View) => void;
   setSearchQuery: (searchQuery: string) => void;
+  setGlobalHotkeyError: (message: string) => void;
   showToast: (toast: ToastState) => void;
   showSuccess: (message: string) => void;
   showError: (message: string) => void;
@@ -26,6 +28,7 @@ export const useAppStore = create<AppStore>((set) => ({
   theme: preferredTheme(),
   view: "scanner",
   searchQuery: "",
+  globalHotkeyError: "",
   toast: null,
   setLanguage: (language) => {
     window.localStorage.setItem("zc-language", language);
@@ -37,6 +40,7 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   setView: (view) => set({ view }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setGlobalHotkeyError: (globalHotkeyError) => set({ globalHotkeyError }),
   showToast: (toast) => set({ toast }),
   showSuccess: (message) => set({ toast: { message, type: "success" } }),
   showError: (message) => set({ toast: { message, type: "error" } }),

@@ -1,6 +1,8 @@
 use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 
+use crate::settings::DEFAULT_SEARCH_HOTKEY;
+
 #[cfg(feature = "desktop-runtime")]
 use tauri::{
     image::Image,
@@ -26,15 +28,22 @@ const SEARCH_WINDOW_URL: &str = "index.html?mode=search";
 const SEARCH_WINDOW_WIDTH: f64 = 640.0;
 #[cfg(feature = "desktop-runtime")]
 const SEARCH_WINDOW_HEIGHT: f64 = 360.0;
-pub const SEARCH_GLOBAL_SHORTCUT: &str = "CmdOrCtrl+Shift+Space";
 #[cfg(feature = "desktop-runtime")]
 const SEARCH_NAVIGATE_EVENT: &str = "search-navigate";
+#[cfg(feature = "desktop-runtime")]
+const GLOBAL_HOTKEY_REGISTRATION_FAILED_EVENT: &str = "global-hotkey-registration-failed";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchNavigatePayload {
     pub view: String,
     pub file_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalHotkeyErrorPayload {
+    pub message: String,
 }
 
 impl SearchNavigatePayload {
@@ -119,8 +128,8 @@ pub fn setup_search_window(app: &mut App) -> tauri::Result<()> {
 }
 
 #[cfg(feature = "desktop-runtime")]
-pub fn setup_global_search_shortcut(app: &mut App) -> Result<(), String> {
-    let shortcut = global_search_shortcut()?;
+pub fn setup_global_search_shortcut(app: &mut App, accelerator: &str) -> Result<(), String> {
+    let shortcut = global_search_shortcut(accelerator)?;
     let shortcut_for_handler = shortcut.clone();
     app.handle()
         .plugin(
@@ -136,17 +145,40 @@ pub fn setup_global_search_shortcut(app: &mut App) -> Result<(), String> {
                 .build(),
         )
         .map_err(|error| error.to_string())?;
-    app.global_shortcut()
-        .register(shortcut)
-        .map_err(|error| error.to_string())?;
+    if let Err(error) = app.global_shortcut().register(shortcut) {
+        let message = format!(
+            "Global search hotkey registration failed for {}: {error}",
+            global_search_accelerator(accelerator)
+        );
+        eprintln!("{message}");
+        emit_global_hotkey_error(app.handle(), message.clone());
+        return Err(message);
+    }
     Ok(())
 }
 
 #[cfg(feature = "desktop-runtime")]
-fn global_search_shortcut() -> Result<Shortcut, String> {
-    SEARCH_GLOBAL_SHORTCUT
+fn global_search_shortcut(accelerator: &str) -> Result<Shortcut, String> {
+    global_search_accelerator(accelerator)
         .parse::<Shortcut>()
         .map_err(|error| error.to_string())
+}
+
+pub fn global_search_accelerator(accelerator: &str) -> &str {
+    let trimmed = accelerator.trim();
+    if trimmed.is_empty() {
+        DEFAULT_SEARCH_HOTKEY
+    } else {
+        trimmed
+    }
+}
+
+#[cfg(feature = "desktop-runtime")]
+fn emit_global_hotkey_error<R: Runtime>(app: &AppHandle<R>, message: String) {
+    let _ = app.emit(
+        GLOBAL_HOTKEY_REGISTRATION_FAILED_EVENT,
+        GlobalHotkeyErrorPayload { message },
+    );
 }
 
 #[cfg(feature = "desktop-runtime")]
@@ -220,13 +252,15 @@ mod tests {
 
     #[test]
     fn global_search_shortcut_matches_documented_accelerator() {
-        assert_eq!(SEARCH_GLOBAL_SHORTCUT, "CmdOrCtrl+Shift+Space");
+        assert_eq!(DEFAULT_SEARCH_HOTKEY, "CmdOrCtrl+K");
+        assert_eq!(global_search_accelerator("Alt+Space"), "Alt+Space");
+        assert_eq!(global_search_accelerator(""), DEFAULT_SEARCH_HOTKEY);
     }
 
     #[cfg(feature = "desktop-runtime")]
     #[test]
     fn global_search_shortcut_parses_for_registration() {
-        assert!(global_search_shortcut().is_ok());
+        assert!(global_search_shortcut(DEFAULT_SEARCH_HOTKEY).is_ok());
     }
 
     #[test]

@@ -153,6 +153,125 @@
     }
 
     #[test]
+    fn execute_rules_for_scope_inbox_only_skips_already_classified_files() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-root-a-resume",
+            "/tmp/root-a/resume_2026.pdf",
+            "resume_2026.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        db.execute_rules_for_scope_with_mode(
+            &LibraryScope::Roots {
+                roots: vec!["/tmp/root-a".to_string()],
+            },
+            Vec::new(),
+            RuleExecutionMode::InboxOnly,
+        )
+        .expect("initial scoped rules");
+        let summary = db
+            .execute_rules_for_scope_with_mode(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                vec![name_contains_rule(
+                    "special-resume-project",
+                    "Resume Project",
+                    "Project",
+                )],
+                RuleExecutionMode::InboxOnly,
+            )
+            .expect("inbox only rules");
+
+        assert_eq!(summary.scanned, 0);
+        assert_eq!(summary.updated, 0);
+    }
+
+    #[test]
+    fn execute_rules_for_scope_all_changed_reclassifies_when_rule_version_changes() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-root-a-special",
+            "/tmp/root-a/special_project.txt",
+            "special_project.txt",
+            "txt",
+            2_048,
+            1_900_000_000,
+        );
+        db.execute_rules_for_scope_with_mode(
+            &LibraryScope::Roots {
+                roots: vec!["/tmp/root-a".to_string()],
+            },
+            vec![name_contains_rule(
+                "special-project",
+                "Special Project",
+                "Project",
+            )],
+            RuleExecutionMode::AllChangedOrRuleChanged,
+        )
+        .expect("first scoped rules");
+        let summary = db
+            .execute_rules_for_scope_with_mode(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                vec![name_contains_rule("special-career", "Special Career", "Career")],
+                RuleExecutionMode::AllChangedOrRuleChanged,
+            )
+            .expect("changed scoped rules");
+        let row = file_classification(&db, "/tmp/root-a/special_project.txt")
+            .expect("classified file");
+
+        assert_eq!(summary.scanned, 1);
+        assert_eq!(summary.updated, 1);
+        assert_eq!(row, ("Career".to_string(), "Inbox".to_string(), false));
+    }
+
+    #[test]
+    fn execute_rules_for_scope_all_changed_skips_unchanged_files_with_same_rules() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let rules = vec![name_contains_rule(
+            "special-project",
+            "Special Project",
+            "Project",
+        )];
+        insert_test_file_at_path(
+            &db,
+            "file-root-a-special",
+            "/tmp/root-a/special_project.txt",
+            "special_project.txt",
+            "txt",
+            2_048,
+            1_900_000_000,
+        );
+        db.execute_rules_for_scope_with_mode(
+            &LibraryScope::Roots {
+                roots: vec!["/tmp/root-a".to_string()],
+            },
+            rules.clone(),
+            RuleExecutionMode::AllChangedOrRuleChanged,
+        )
+        .expect("first scoped rules");
+        let summary = db
+            .execute_rules_for_scope_with_mode(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                rules,
+                RuleExecutionMode::AllChangedOrRuleChanged,
+            )
+            .expect("unchanged scoped rules");
+
+        assert_eq!(summary.scanned, 1);
+        assert_eq!(summary.updated, 0);
+        assert_eq!(summary.skipped, 1);
+    }
+
+    #[test]
     fn execute_rules_for_paths_ignores_missing_paths() {
         let db = Database::open(test_db_path()).expect("open test database");
 

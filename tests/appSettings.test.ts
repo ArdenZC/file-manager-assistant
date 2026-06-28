@@ -18,7 +18,8 @@ describe("app settings helpers", () => {
       folderNamingLanguage: "en",
       defaultScanFolders: [],
       restoreRetentionDays: 30,
-      launchAtLogin: false
+      launchAtLogin: false,
+      searchHotkey: "CmdOrCtrl+K"
     });
   });
 
@@ -45,7 +46,8 @@ describe("app settings helpers", () => {
         }
       ],
       restoreRetentionDays: 90,
-      launchAtLogin: false
+      launchAtLogin: false,
+      searchHotkey: "CmdOrCtrl+K"
     });
     expect(previous.defaultScanFolders).toEqual([]);
   });

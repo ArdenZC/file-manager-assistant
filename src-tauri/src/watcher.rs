@@ -3,8 +3,8 @@ use crate::{
     settings::{AppSettings, ScanRootSetting},
 };
 use notify::{
-    event::ModifyKind, recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode,
-    Watcher,
+    event::{ModifyKind, RenameMode},
+    recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
 use serde::Serialize;
 use std::{
@@ -46,6 +46,8 @@ enum WatcherError {
 pub struct FileWatchEvent {
     pub event_type: String,
     pub paths: Vec<String>,
+    pub stale_paths: Vec<String>,
+    pub upsert_paths: Vec<String>,
     pub timestamp_ms: u128,
 }
 
@@ -289,29 +291,55 @@ fn event_to_payload(event: Event) -> Option<FileWatchEvent> {
         return None;
     }
 
-    let paths = event
-        .paths
-        .into_iter()
-        .filter(|path| !is_ignored_path(path))
-        .map(|path| normalize_path(&path))
-        .collect::<Vec<_>>();
+    let paths = normalize_event_paths(&event.paths);
 
     if paths.is_empty() {
         return None;
     }
 
+    let (stale_paths, upsert_paths) = route_event_paths(&event.kind, &event.paths);
+
     Some(FileWatchEvent {
         event_type: event_type(&event.kind).to_string(),
         paths,
+        stale_paths,
+        upsert_paths,
         timestamp_ms: current_timestamp_ms(),
     })
+}
+
+fn route_event_paths(kind: &EventKind, paths: &[PathBuf]) -> (Vec<String>, Vec<String>) {
+    match kind {
+        EventKind::Remove(_) => (normalize_event_paths(paths), Vec::new()),
+        EventKind::Create(_) => (Vec::new(), normalize_event_paths(paths)),
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+            if paths.len() >= 2 {
+                (
+                    normalize_event_paths(&paths[0..1]),
+                    normalize_event_paths(&paths[1..2]),
+                )
+            } else {
+                (Vec::new(), normalize_event_paths(paths))
+            }
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+            (normalize_event_paths(paths), Vec::new())
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+            (Vec::new(), normalize_event_paths(paths))
+        }
+        EventKind::Modify(ModifyKind::Name(_)) | EventKind::Modify(_) | EventKind::Any => {
+            (Vec::new(), normalize_event_paths(paths))
+        }
+        EventKind::Access(_) | EventKind::Other => (Vec::new(), Vec::new()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::settings::ScanRootSetting;
-    use notify::event::{AccessKind, EventAttributes};
+    use notify::event::{AccessKind, EventAttributes, RenameMode};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -400,6 +428,58 @@ mod tests {
         assert!(event_to_payload(event).is_none());
     }
 
+    #[test]
+    fn event_to_payload_splits_rename_old_and_new_paths() {
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            paths: vec![
+                PathBuf::from("/Users/zen/Documents/old.pdf"),
+                PathBuf::from("/Users/zen/Documents/new.pdf"),
+            ],
+            attrs: EventAttributes::new(),
+        };
+
+        let payload = event_to_payload(event).expect("rename payload");
+
+        assert_eq!(payload.event_type, "renamed");
+        assert_eq!(payload.stale_paths, vec!["/Users/zen/Documents/old.pdf"]);
+        assert_eq!(payload.upsert_paths, vec!["/Users/zen/Documents/new.pdf"]);
+        assert_eq!(
+            payload.paths,
+            vec![
+                "/Users/zen/Documents/old.pdf".to_string(),
+                "/Users/zen/Documents/new.pdf".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn event_to_payload_routes_delete_and_create_paths() {
+        let deleted = event_to_payload(Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![PathBuf::from("/Users/zen/Documents/deleted.pdf")],
+            attrs: EventAttributes::new(),
+        })
+        .expect("delete payload");
+        let created = event_to_payload(Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![PathBuf::from("/Users/zen/Documents/created.pdf")],
+            attrs: EventAttributes::new(),
+        })
+        .expect("create payload");
+
+        assert_eq!(
+            deleted.stale_paths,
+            vec!["/Users/zen/Documents/deleted.pdf"]
+        );
+        assert!(deleted.upsert_paths.is_empty());
+        assert_eq!(
+            created.upsert_paths,
+            vec!["/Users/zen/Documents/created.pdf"]
+        );
+        assert!(created.stale_paths.is_empty());
+    }
+
     fn scan_root(id: &str, path: &str, enabled: bool) -> ScanRootSetting {
         ScanRootSetting {
             id: id.to_string(),
@@ -465,6 +545,14 @@ fn normalize_watch_roots(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, WatcherErr
 fn is_ignored_path(path: &Path) -> bool {
     path.components()
         .any(|component| is_ignored_dir_name(component.as_os_str()))
+}
+
+fn normalize_event_paths(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| !is_ignored_path(path))
+        .map(|path| normalize_path(path))
+        .collect()
 }
 
 fn normalize_path(path: &Path) -> String {

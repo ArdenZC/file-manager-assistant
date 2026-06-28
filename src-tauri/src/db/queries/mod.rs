@@ -53,16 +53,27 @@ struct ScopePathSql {
 }
 
 pub(crate) fn scoped_files_sql(scope: Option<&LibraryScope>) -> ScopedFilesSql {
+    scoped_files_sql_with_extra_where(scope, None)
+}
+
+pub(crate) fn scoped_files_sql_with_extra_where(
+    scope: Option<&LibraryScope>,
+    extra_where: Option<&str>,
+) -> ScopedFilesSql {
     let filter = scope_path_filter(scope, "f");
     let scope_clause = if filter.clause.is_empty() {
         String::new()
     } else {
         format!(" AND ({})", filter.clause)
     };
+    let extra_clause = extra_where
+        .filter(|clause| !clause.trim().is_empty())
+        .map(|clause| format!(" AND ({clause})"))
+        .unwrap_or_default();
 
     ScopedFilesSql {
         cte: format!(
-            "scoped_files AS (SELECT f.rowid AS rowid, f.* FROM files AS f WHERE f.is_stale = 0{scope_clause})"
+            "scoped_files AS (SELECT f.rowid AS rowid, f.* FROM files AS f WHERE f.is_stale = 0{scope_clause}{extra_clause})"
         ),
         params: filter.params,
     }

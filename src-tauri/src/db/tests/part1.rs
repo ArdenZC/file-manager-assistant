@@ -115,6 +115,34 @@
     }
 
     #[test]
+    fn migrated_schema_contains_common_library_performance_indexes() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let conn = Connection::open(db.path()).expect("open migrated database");
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'files'")
+            .expect("prepare index query");
+        let index_names = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query index names")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect index names");
+
+        for expected in [
+            "idx_files_active_mtime",
+            "idx_files_lifecycle_mtime",
+            "idx_files_action_mtime",
+            "idx_files_review_mtime",
+            "idx_files_risk_mtime",
+            "idx_files_scope_path",
+        ] {
+            assert!(
+                index_names.iter().any(|name| name == expected),
+                "missing performance index {expected}; indexes were {index_names:?}"
+            );
+        }
+    }
+
+    #[test]
     fn get_paged_files_filters_by_library_scope_roots() {
         let db = Database::open(test_db_path()).expect("open test database");
         insert_test_file_at_path(
@@ -159,6 +187,352 @@
         assert_eq!(page_b.total, 1);
         assert_eq!(page_b.files[0].name, "b.pdf");
         assert_eq!(page_all.total, 2);
+    }
+
+    #[test]
+    fn get_paged_files_filters_review_files_and_search_query_together() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-review-pdf",
+            "/tmp/root-a/invoice_review.pdf",
+            "invoice_review.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        insert_test_file_at_path(
+            &db,
+            "file-review-image",
+            "/tmp/root-a/invoice_review.png",
+            "invoice_review.png",
+            "png",
+            2_048,
+            1_900_000_001,
+        );
+        insert_test_file_at_path(
+            &db,
+            "file-active-pdf",
+            "/tmp/root-a/project_invoice.pdf",
+            "project_invoice.pdf",
+            "pdf",
+            2_048,
+            1_900_000_002,
+        );
+        set_file_review_state(
+            &db,
+            "/tmp/root-a/invoice_review.pdf",
+            "Inbox",
+            "Review",
+            true,
+        );
+        set_file_review_state(
+            &db,
+            "/tmp/root-a/invoice_review.png",
+            "Inbox",
+            "Review",
+            true,
+        );
+        set_file_review_state(
+            &db,
+            "/tmp/root-a/project_invoice.pdf",
+            "Active",
+            "Keep",
+            false,
+        );
+
+        let page = db
+            .get_paged_files_in_scope_with_filter(
+                Some(10),
+                Some(0),
+                Some("pdf"),
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Review),
+                }),
+            )
+            .expect("review pdf page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.files[0].id, "file-review-pdf");
+    }
+
+    #[test]
+    fn get_paged_files_query_plan_is_available_for_benchmark_diagnostics() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-review-pdf",
+            "/tmp/root-a/invoice_review.pdf",
+            "invoice_review.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        set_file_review_state(
+            &db,
+            "/tmp/root-a/invoice_review.pdf",
+            "Inbox",
+            "Review",
+            true,
+        );
+
+        let plan = db
+            .explain_paged_files_query_plan(
+                Some("invoice"),
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Review),
+                }),
+            )
+            .expect("query plan");
+
+        assert!(
+            plan.iter().any(|line| line.contains("files_fts") || line.contains("idx_files")),
+            "query plan should mention the FTS table or files indexes: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn get_paged_files_filters_library_buckets() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        let samples = [
+            ("file-active", "active.txt", "txt"),
+            ("file-reference", "reference.txt", "txt"),
+            ("file-keep", "keep.txt", "txt"),
+            ("file-archive", "archive.txt", "txt"),
+            ("file-review", "review.txt", "txt"),
+            ("file-delete-candidate", "delete-candidate.txt", "txt"),
+        ];
+        for (index, (id, name, extension)) in samples.into_iter().enumerate() {
+            insert_test_file_at_path(
+                &db,
+                id,
+                &format!("/tmp/root-a/{name}"),
+                name,
+                extension,
+                2_048,
+                1_900_000_000 + index as i64,
+            );
+        }
+        set_file_review_state(&db, "/tmp/root-a/active.txt", "Active", "Move", false);
+        set_file_review_state(&db, "/tmp/root-a/reference.txt", "Reference", "Move", false);
+        set_file_review_state(&db, "/tmp/root-a/keep.txt", "Inbox", "Keep", false);
+        set_file_review_state(&db, "/tmp/root-a/archive.txt", "Archive", "Archive", false);
+        set_file_review_state(&db, "/tmp/root-a/review.txt", "Inbox", "Review", true);
+        set_file_review_state(
+            &db,
+            "/tmp/root-a/delete-candidate.txt",
+            "Inbox",
+            "DeleteCandidate",
+            false,
+        );
+        let scope = LibraryScope::Roots {
+            roots: vec!["/tmp/root-a".to_string()],
+        };
+
+        let active = db
+            .get_paged_files_in_scope_with_filter(
+                Some(10),
+                Some(0),
+                None,
+                &scope,
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Active),
+                }),
+            )
+            .expect("active page");
+        let archive = db
+            .get_paged_files_in_scope_with_filter(
+                Some(10),
+                Some(0),
+                None,
+                &scope,
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Archive),
+                }),
+            )
+            .expect("archive page");
+        let review = db
+            .get_paged_files_in_scope_with_filter(
+                Some(10),
+                Some(0),
+                None,
+                &scope,
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Review),
+                }),
+            )
+            .expect("review page");
+
+        assert_eq!(active.total, 3);
+        assert!(active.files.iter().any(|file| file.id == "file-active"));
+        assert!(active.files.iter().any(|file| file.id == "file-reference"));
+        assert!(active.files.iter().any(|file| file.id == "file-keep"));
+        assert_eq!(archive.total, 1);
+        assert_eq!(archive.files[0].id, "file-archive");
+        assert_eq!(review.total, 2);
+        assert!(review.files.iter().any(|file| file.id == "file-review"));
+        assert!(review
+            .files
+            .iter()
+            .any(|file| file.id == "file-delete-candidate"));
+    }
+
+    #[test]
+    fn get_operation_previews_for_scope_uses_full_scope_not_first_page() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        for index in 0..60 {
+            let name = format!("project-{index:02}.txt");
+            let path = format!("/tmp/root-a/{name}");
+            insert_test_file_at_path(
+                &db,
+                &format!("file-{index:02}"),
+                &path,
+                &name,
+                "txt",
+                2_048,
+                1_900_000_000 + index,
+            );
+            set_file_operation_suggestion(
+                &db,
+                &path,
+                "Move",
+                "/tmp/root-a/ZenCanvas/20_Areas/Projects",
+                &name,
+                "Normal",
+                0.91,
+                false,
+            );
+        }
+
+        let result = db
+            .get_operation_previews_for_scope(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                None,
+                Some(100),
+                Some(0),
+            )
+            .expect("scope previews");
+
+        assert_eq!(result.total, 60);
+        assert_eq!(result.previews.len(), 60);
+        assert!(!result.truncated);
+        assert!(!result.has_more);
+        assert!(result
+            .previews
+            .iter()
+            .all(|preview| preview.is_executable != Some(false)));
+    }
+
+    #[test]
+    fn get_operation_previews_for_scope_reports_has_more_for_partial_pages() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        for index in 0..3 {
+            let name = format!("partial-{index}.txt");
+            let path = format!("/tmp/root-a/{name}");
+            insert_test_file_at_path(
+                &db,
+                &format!("file-partial-{index}"),
+                &path,
+                &name,
+                "txt",
+                2_048,
+                1_900_000_000 + index,
+            );
+            set_file_operation_suggestion(
+                &db,
+                &path,
+                "Move",
+                "/tmp/root-a/ZenCanvas/20_Areas/Projects",
+                &name,
+                "Normal",
+                0.91,
+                false,
+            );
+        }
+
+        let first = db
+            .get_operation_previews_for_scope(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                None,
+                Some(2),
+                Some(0),
+            )
+            .expect("first page");
+        let second = db
+            .get_operation_previews_for_scope(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                None,
+                Some(2),
+                Some(2),
+            )
+            .expect("second page");
+
+        assert_eq!(first.total, 3);
+        assert_eq!(first.previews.len(), 2);
+        assert!(first.truncated);
+        assert!(first.has_more);
+        assert_eq!(second.previews.len(), 1);
+        assert!(!second.truncated);
+        assert!(!second.has_more);
+    }
+
+    #[test]
+    fn get_operation_previews_for_scope_marks_sensitive_files_blocked() {
+        let db = Database::open(test_db_path()).expect("open test database");
+        insert_test_file_at_path(
+            &db,
+            "file-sensitive",
+            "/tmp/root-a/passport.pdf",
+            "passport.pdf",
+            "pdf",
+            2_048,
+            1_900_000_000,
+        );
+        set_file_operation_suggestion(
+            &db,
+            "/tmp/root-a/passport.pdf",
+            "Move",
+            "/tmp/root-a/ZenCanvas/20_Areas/Identity",
+            "passport.pdf",
+            "Sensitive",
+            0.95,
+            true,
+        );
+
+        let result = db
+            .get_operation_previews_for_scope(
+                &LibraryScope::Roots {
+                    roots: vec!["/tmp/root-a".to_string()],
+                },
+                None,
+                Some(100),
+                Some(0),
+            )
+            .expect("scope previews");
+        let preview = result.previews.first().expect("sensitive preview");
+
+        assert_eq!(result.total, 1);
+        assert_eq!(preview.file_id, "file-sensitive");
+        assert_eq!(preview.is_executable, Some(false));
+        assert_eq!(preview.selected_by_default, Some(false));
+        assert!(preview.requires_confirmation);
+        assert!(preview
+            .blocking_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Sensitive"));
     }
 
     #[test]

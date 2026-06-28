@@ -53,15 +53,29 @@ pub fn get_paged_files(
     offset: Option<u32>,
     query: Option<String>,
     scope: Option<LibraryScope>,
+    filter: Option<FileLibraryFilter>,
 ) -> Result<PagedFilesResult, String> {
-    match scope.as_ref() {
-        Some(scope) => db
-            .get_paged_files_in_scope(limit, offset, query.as_deref(), scope)
-            .map_err(command_error),
-        None => db
-            .get_paged_files(limit, offset, query.as_deref())
-            .map_err(command_error),
-    }
+    let scope = scope.unwrap_or(LibraryScope::All);
+    db.get_paged_files_in_scope_with_filter(
+        limit,
+        offset,
+        query.as_deref(),
+        &scope,
+        filter.as_ref(),
+    )
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_operation_previews_for_scope(
+    db: State<'_, Database>,
+    scope: LibraryScope,
+    filter: Option<FileLibraryFilter>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<OperationPreviewScopeResult, String> {
+    db.get_operation_previews_for_scope(&scope, filter.as_ref(), limit, offset)
+        .map_err(command_error)
 }
 
 #[tauri::command]
@@ -128,12 +142,16 @@ pub async fn execute_rules_for_scope(
     db: State<'_, Database>,
     scope: LibraryScope,
     rules: Vec<Rule>,
+    mode: Option<RuleExecutionMode>,
 ) -> Result<RuleExecutionSummary, String> {
     let db = db.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || db.execute_rules_for_scope(&scope, rules))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(command_error)
+    let mode = mode.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        db.execute_rules_for_scope_with_mode(&scope, rules, mode)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(command_error)
 }
 
 fn command_error(error: DbError) -> String {

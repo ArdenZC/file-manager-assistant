@@ -14,9 +14,11 @@ use tauri::{AppHandle, Manager, Runtime};
 pub use app_control::{activate_search_result, quit_app, SearchNavigatePayload};
 pub use db::{
     delete_user_rule, execute_rules_for_paths, execute_rules_for_scope, execute_rules_on_inbox,
-    get_operation_logs, get_paged_files, get_stats_summary, get_user_rules, init_db, insert_file,
-    save_user_rule, search_files, upsert_files_by_paths, FileRecordDto, FileSearchResult,
-    InsertFileRequest, LibraryScope, PagedFilesResult, Rule, RuleExecutionSummary, StatsSummary,
+    get_operation_logs, get_operation_previews_for_scope, get_paged_files, get_stats_summary,
+    get_user_rules, init_db, insert_file, save_user_rule, search_files, upsert_files_by_paths,
+    FileLibraryFilter, FileRecordDto, FileSearchResult, InsertFileRequest, LibraryFilter,
+    LibraryScope, OperationPreviewDto, OperationPreviewScopeResult, PagedFilesResult, Rule,
+    RuleExecutionMode, RuleExecutionSummary, StatsSummary,
 };
 pub use file_ops::{
     cancel_operations, execute_moves, move_file, rename_file, restore_moves, ExecuteMovesRequest,
@@ -28,7 +30,9 @@ pub use scanner::{
     ScanSummary, ScannedEntry,
 };
 pub use settings::{get_app_settings, get_settings, save_app_settings, save_settings, AppSettings};
-pub use watcher::{setup_file_watcher, FileWatchEvent, WatcherErrorEvent, WatcherReadyEvent};
+pub use watcher::{
+    setup_file_watcher, FileWatchEvent, FileWatcherManager, WatcherErrorEvent, WatcherReadyEvent,
+};
 
 pub fn database_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let dir = app

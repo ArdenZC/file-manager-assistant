@@ -1,8 +1,13 @@
 use super::super::*;
 use super::*;
 use crate::file_ops::OperationLogDto;
-use rusqlite::{params, params_from_iter, types::Value as SqlValue};
-use std::{collections::HashMap, fs, path::PathBuf, time::Instant};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection};
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use sysinfo::Disks;
 
 #[derive(Debug, Clone)]
@@ -344,7 +349,7 @@ impl Database {
         offset: Option<u32>,
         query: Option<&str>,
     ) -> Result<PagedFilesResult, DbError> {
-        self.get_paged_files_in_scope(limit, offset, query, &LibraryScope::All)
+        self.get_paged_files_in_scope_with_filter(limit, offset, query, &LibraryScope::All, None)
     }
 
     pub fn get_paged_files_in_scope(
@@ -354,11 +359,22 @@ impl Database {
         query: Option<&str>,
         scope: &LibraryScope,
     ) -> Result<PagedFilesResult, DbError> {
+        self.get_paged_files_in_scope_with_filter(limit, offset, query, scope, None)
+    }
+
+    pub fn get_paged_files_in_scope_with_filter(
+        &self,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        query: Option<&str>,
+        scope: &LibraryScope,
+        filter: Option<&FileLibraryFilter>,
+    ) -> Result<PagedFilesResult, DbError> {
         let limit = limit.unwrap_or(50).clamp(1, 200);
         let offset = offset.unwrap_or(0);
         let now = current_timestamp_iso();
         let conn = self.conn()?;
-        let scoped = scoped_files_sql(Some(scope));
+        let scoped = scoped_files_sql_with_extra_where(Some(scope), library_filter_clause(filter));
 
         if let Some((raw_query, fts_query)) =
             query.and_then(|value| build_fts_query(value).map(|fts_query| (value, fts_query)))
@@ -375,6 +391,12 @@ impl Database {
             );
             let mut total_params = scoped.params.clone();
             total_params.extend(search.params.clone());
+            maybe_print_query_plan(
+                &conn,
+                "get_paged_files.search.total",
+                &total_sql,
+                &total_params,
+            )?;
             let total =
                 conn.query_row(&total_sql, params_from_iter(total_params.iter()), |row| {
                     row.get(0)
@@ -437,6 +459,12 @@ impl Database {
             page_params.extend(search.params);
             page_params.push(SqlValue::Integer(i64::from(limit)));
             page_params.push(SqlValue::Integer(i64::from(offset)));
+            maybe_print_query_plan(
+                &conn,
+                "get_paged_files.search.page",
+                &page_sql,
+                &page_params,
+            )?;
             let mut stmt = conn.prepare(&page_sql)?;
             let rows =
                 stmt.query_map(params_from_iter(page_params.iter()), indexed_file_from_row)?;
@@ -453,6 +481,7 @@ impl Database {
         }
 
         let total_sql = format!("WITH {} SELECT COUNT(*) FROM scoped_files", scoped.cte);
+        maybe_print_query_plan(&conn, "get_paged_files.total", &total_sql, &scoped.params)?;
         let total = conn.query_row(&total_sql, params_from_iter(scoped.params.iter()), |row| {
             row.get(0)
         })?;
@@ -486,6 +515,7 @@ impl Database {
         let mut page_params = scoped.params.clone();
         page_params.push(SqlValue::Integer(i64::from(limit)));
         page_params.push(SqlValue::Integer(i64::from(offset)));
+        maybe_print_query_plan(&conn, "get_paged_files.page", &page_sql, &page_params)?;
         let mut stmt = conn.prepare(&page_sql)?;
         let rows = stmt.query_map(params_from_iter(page_params.iter()), |row| {
             indexed_file_from_row(row)
@@ -499,6 +529,123 @@ impl Database {
             total,
             limit,
             offset,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn explain_paged_files_query_plan(
+        &self,
+        query: Option<&str>,
+        scope: &LibraryScope,
+        filter: Option<&FileLibraryFilter>,
+    ) -> Result<Vec<String>, DbError> {
+        let conn = self.conn()?;
+        let scoped = scoped_files_sql_with_extra_where(Some(scope), library_filter_clause(filter));
+        if let Some((raw_query, fts_query)) =
+            query.and_then(|value| build_fts_query(value).map(|fts_query| (value, fts_query)))
+        {
+            let search = search_match_sql(&fts_query, raw_query);
+            let page_sql = format!(
+                r#"
+                WITH {},
+                {}
+                SELECT f.id
+                FROM best_matches AS bm
+                JOIN scoped_files AS f ON f.rowid = bm.rowid
+                ORDER BY bm.rank ASC, f.mtime DESC, length(f.path) ASC
+                LIMIT ? OFFSET ?
+                "#,
+                scoped.cte, search.cte
+            );
+            let mut params = scoped.params.clone();
+            params.extend(search.params);
+            params.push(SqlValue::Integer(50));
+            params.push(SqlValue::Integer(0));
+            return explain_query_plan(&conn, &page_sql, &params);
+        }
+
+        let page_sql = format!(
+            r#"
+            WITH {}
+            SELECT f.id
+            FROM scoped_files AS f
+            ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
+            LIMIT ? OFFSET ?
+            "#,
+            scoped.cte
+        );
+        let mut params = scoped.params.clone();
+        params.push(SqlValue::Integer(50));
+        params.push(SqlValue::Integer(0));
+        explain_query_plan(&conn, &page_sql, &params)
+    }
+
+    pub fn get_operation_previews_for_scope(
+        &self,
+        scope: &LibraryScope,
+        filter: Option<&FileLibraryFilter>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<OperationPreviewScopeResult, DbError> {
+        let limit = limit.unwrap_or(1000).clamp(1, 2000);
+        let offset = offset.unwrap_or(0);
+        let extra_where = operation_preview_filter_clause(filter);
+        let scoped = scoped_files_sql_with_extra_where(Some(scope), Some(&extra_where));
+        let conn = self.conn()?;
+
+        let total_sql = format!("WITH {} SELECT COUNT(*) FROM scoped_files", scoped.cte);
+        let total = conn.query_row(&total_sql, params_from_iter(scoped.params.iter()), |row| {
+            row.get::<_, i64>(0)
+        })?;
+        let page_sql = format!(
+            r#"
+            WITH {},
+            dup_groups AS (
+                SELECT size, content_hash
+                FROM scoped_files
+                WHERE is_dir = 0
+                  AND content_hash <> ''
+                GROUP BY size, content_hash
+                HAVING COUNT(*) > 1
+            )
+            SELECT f.id, f.path, f.name, f.extension, f.size, f.mtime, f.ctime, f.is_dir, f.state_code,
+                   f.file_type, f.purpose, f.lifecycle, f.context, f.risk_level, f.suggested_action,
+                   f.suggested_target_path, f.suggested_name, f.confidence, f.classification_reason,
+                   f.classification_status, f.matched_rules, f.requires_confirmation, f.content_hash,
+                   (dg.content_hash IS NOT NULL) AS is_duplicate,
+                   f.is_stale, f.last_seen_at, f.last_classified_at, f.classified_rule_version,
+                   f.last_classified_mtime, f.last_classified_size
+            FROM scoped_files AS f
+            LEFT JOIN dup_groups AS dg
+              ON dg.size = f.size
+             AND dg.content_hash = f.content_hash
+            ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
+            LIMIT ? OFFSET ?
+            "#,
+            scoped.cte
+        );
+        let mut page_params = scoped.params.clone();
+        page_params.push(SqlValue::Integer(i64::from(limit)));
+        page_params.push(SqlValue::Integer(i64::from(offset)));
+        let mut stmt = conn.prepare(&page_sql)?;
+        let rows = stmt.query_map(params_from_iter(page_params.iter()), indexed_file_from_row)?;
+        let previews = rows
+            .map(|row| row.map(operation_preview_from_indexed))
+            .filter_map(|row| match row {
+                Ok(Some(preview)) => Some(Ok(preview)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let has_more = i64::from(offset) + (previews.len() as i64) < total;
+        Ok(OperationPreviewScopeResult {
+            previews,
+            total,
+            limit,
+            offset,
+            truncated: has_more,
+            has_more,
         })
     }
 
@@ -638,6 +785,157 @@ impl Database {
             last_scanned_at: last_mtime.map(unix_seconds_to_iso),
         })
     }
+}
+
+fn maybe_print_query_plan(
+    conn: &Connection,
+    label: &str,
+    sql: &str,
+    params: &[SqlValue],
+) -> Result<(), DbError> {
+    if !matches!(
+        env::var("ZC_BENCH_EXPLAIN").as_deref(),
+        Ok("1" | "true" | "TRUE" | "yes" | "YES")
+    ) {
+        return Ok(());
+    }
+
+    let plan = explain_query_plan(conn, sql, params)?;
+    for line in plan {
+        eprintln!("[ZC_BENCH_EXPLAIN] {label}: {line}");
+    }
+    Ok(())
+}
+
+fn explain_query_plan(
+    conn: &Connection,
+    sql: &str,
+    params: &[SqlValue],
+) -> Result<Vec<String>, DbError> {
+    let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
+    let mut stmt = conn.prepare(&explain_sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+        Ok(format!(
+            "id={} parent={} not_used={} detail={}",
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?
+        ))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+}
+
+fn operation_preview_filter_clause(filter: Option<&FileLibraryFilter>) -> String {
+    let action_clause =
+        "f.is_dir = 0 AND f.suggested_action IN ('Move', 'Rename', 'MoveAndRename', 'Archive')";
+    match library_filter_clause(filter) {
+        Some(library_clause) => format!("{action_clause} AND ({library_clause})"),
+        None => action_clause.to_string(),
+    }
+}
+
+fn library_filter_clause(filter: Option<&FileLibraryFilter>) -> Option<&'static str> {
+    match filter.and_then(|filter| filter.library_filter.as_ref()) {
+        None | Some(LibraryFilter::All) => None,
+        Some(LibraryFilter::Active) => {
+            Some("f.lifecycle IN ('Active', 'Reference') OR f.suggested_action = 'Keep'")
+        }
+        Some(LibraryFilter::Archive) => Some("f.lifecycle = 'Archive'"),
+        Some(LibraryFilter::Review) => Some(
+            "f.requires_confirmation = 1 OR f.suggested_action IN ('Review', 'DeleteCandidate')",
+        ),
+    }
+}
+
+fn operation_preview_from_indexed(row: IndexedFileRow) -> Option<OperationPreviewDto> {
+    let source_directory = parent_directory(&row.path);
+    let new_name = if row.suggested_name.trim().is_empty() {
+        row.name.clone()
+    } else {
+        row.suggested_name.clone()
+    };
+    let target_directory = match row.suggested_action.as_str() {
+        "Rename" => {
+            if row.suggested_target_path.trim().is_empty() {
+                source_directory.clone()
+            } else {
+                row.suggested_target_path.clone()
+            }
+        }
+        "Move" | "MoveAndRename" | "Archive" => row.suggested_target_path.clone(),
+        _ => String::new(),
+    };
+    let target_path = if target_directory.trim().is_empty() {
+        row.path.clone()
+    } else {
+        join_path_text(&target_directory, &new_name)
+    };
+    if normalize_path_for_compare_text(&row.path) == normalize_path_for_compare_text(&target_path) {
+        return None;
+    }
+
+    let is_move = !target_directory.trim().is_empty()
+        && normalize_path_for_compare_text(&target_directory)
+            != normalize_path_for_compare_text(&source_directory);
+    let is_rename = new_name != row.name;
+    let operation_type = if is_move && is_rename {
+        "move_rename"
+    } else if is_move {
+        "move"
+    } else {
+        "rename"
+    };
+    let is_sensitive = row.risk_level == "Sensitive";
+    let requires_confirmation = row.requires_confirmation || row.confidence < 0.7 || is_sensitive;
+    let is_executable = !is_sensitive;
+    let target_parent_exists = Path::new(&target_path)
+        .parent()
+        .map(|parent| parent.exists())
+        .unwrap_or(false);
+
+    Some(OperationPreviewDto {
+        id: operation_preview_id(&row.id),
+        file_id: row.id,
+        operation_type: operation_type.to_string(),
+        source_path: row.path,
+        target_path,
+        old_name: row.name,
+        new_name,
+        status: "pending".to_string(),
+        risk_level: row.risk_level,
+        confidence: row.confidence,
+        requires_confirmation,
+        reason: row.classification_reason,
+        selected_by_default: Some(is_executable && !requires_confirmation),
+        is_executable: Some(is_executable),
+        blocking_reason: is_sensitive
+            .then(|| "Sensitive files require manual confirmation.".to_string()),
+        editable_new_name: Some(true),
+        target_parent_exists: Some(target_parent_exists),
+        will_create_parent: Some(!target_parent_exists),
+    })
+}
+
+fn operation_preview_id(file_id: &str) -> String {
+    let digest = blake3::hash(file_id.as_bytes()).to_hex().to_string();
+    format!("op-{}", &digest[..16])
+}
+
+fn join_path_text(directory: &str, name: &str) -> String {
+    let separator = if directory.contains('\\') { '\\' } else { '/' };
+    format!(
+        "{}{}{}",
+        directory.trim_end_matches(['/', '\\']),
+        separator,
+        name
+    )
+}
+
+fn normalize_path_for_compare_text(path: &str) -> String {
+    normalize_path_text(path)
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
 }
 
 fn search_match_sql(fts_query: &str, raw_query: &str) -> SearchMatchSql {

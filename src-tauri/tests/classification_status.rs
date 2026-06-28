@@ -6,7 +6,7 @@ use std::{
 use zen_canvas_tauri::db::Database;
 
 #[test]
-fn schema_version_10_adds_classification_status_and_preserves_existing_state() {
+fn schema_migration_adds_classification_status_and_preserves_existing_state() {
     let path = test_db_path();
     create_schema_9_database(&path);
 
@@ -40,7 +40,7 @@ fn schema_version_10_adds_classification_status_and_preserves_existing_state() {
         )
         .expect("classified status");
 
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(status_type, "TEXT");
     assert_eq!(status_notnull, 1);
     assert_eq!(unclassified_status, "unclassified");

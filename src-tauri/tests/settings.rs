@@ -31,12 +31,13 @@ fn new_database_creates_default_app_settings_row() {
         .expect("default app settings row");
     let settings: AppSettings = serde_json::from_str(&value).expect("deserialize settings");
 
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(settings.close_behavior, "ask");
     assert_eq!(settings.folder_naming_language, "en");
     assert_default_scan_roots(&settings.default_scan_folders);
     assert_eq!(settings.restore_retention_days, 30);
     assert!(!settings.launch_at_login);
+    assert_eq!(settings.search_hotkey, "CmdOrCtrl+K");
 }
 
 #[test]
@@ -68,10 +69,11 @@ fn schema_7_database_migrates_to_settings_without_losing_existing_rows() {
         .expect("legacy rule");
     let default_settings = get_app_settings(&db).expect("default settings");
 
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(file_name, "legacy.pdf");
     assert_eq!(rule_name, "Legacy Rule");
     assert_default_scan_roots(&default_settings.default_scan_folders);
+    assert_eq!(default_settings.search_hotkey, "CmdOrCtrl+K");
 }
 
 #[test]
@@ -88,6 +90,7 @@ fn app_settings_roundtrip_persists_single_json_row() {
     )];
     settings.restore_retention_days = 90;
     settings.launch_at_login = true;
+    settings.search_hotkey = "Alt+Space".to_string();
 
     save_app_settings(&db, &settings).expect("save settings");
     let loaded = get_app_settings(&db).expect("load settings");
@@ -109,6 +112,7 @@ fn app_settings_roundtrip_persists_single_json_row() {
     );
     assert_eq!(loaded.restore_retention_days, 90);
     assert!(loaded.launch_at_login);
+    assert_eq!(loaded.search_hotkey, "Alt+Space");
     assert_eq!(row_count, 1);
 }
 
@@ -138,6 +142,7 @@ fn legacy_string_default_scan_folders_load_as_absolute_scan_roots() {
     let loaded = get_app_settings(&db).expect("load migrated legacy settings");
 
     assert_default_scan_roots(&loaded.default_scan_folders);
+    assert_eq!(loaded.search_hotkey, "CmdOrCtrl+K");
 }
 
 #[test]

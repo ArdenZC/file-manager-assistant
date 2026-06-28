@@ -5,7 +5,9 @@ use std::{
 };
 
 use rusqlite::{params, Connection, ToSql};
-use zen_canvas_tauri::{db::Database, InsertFileRequest};
+use zen_canvas_tauri::{
+    db::Database, FileLibraryFilter, InsertFileRequest, LibraryFilter, LibraryScope,
+};
 
 const DEFAULT_ROWS: usize = 100_000;
 const DEFAULT_P95_MS: f64 = 1_000.0;
@@ -14,12 +16,13 @@ const QUERY_RUNS: usize = 1;
 const KEYWORD_STRIDE: usize = 1_000;
 const SEARCH_LIMIT: i64 = 50;
 const OPTIMIZE_PROBE_QUERY: &str = "screenshot";
-const BENCH_QUERIES: [&str; 7] = [
+const BENCH_QUERIES: [&str; 8] = [
     "resume",
     "invoice",
     "screenshot",
     "project",
     "身份证",
+    "pdf",
     "report",
     "archive",
 ];
@@ -50,11 +53,20 @@ LIMIT ?2
 "#;
 
 struct QueryDiagnostics {
+    label: String,
     query: String,
     match_count: i64,
     count_ms: f64,
     search_ms: f64,
     total_ms: f64,
+    rows: usize,
+}
+
+struct PagedDiagnostics {
+    label: &'static str,
+    query: &'static str,
+    total: i64,
+    elapsed_ms: f64,
     rows: usize,
 }
 
@@ -95,6 +107,7 @@ fn fts_query_diagnostics_measure_count_and_search() {
     drop(db);
     let _ = fs::remove_dir_all(&temp_dir);
 
+    assert_eq!(diagnostics.label, "english_search");
     assert_eq!(diagnostics.query, "resume");
     assert_eq!(diagnostics.match_count, 2);
     assert_eq!(diagnostics.rows, 2);
@@ -117,6 +130,7 @@ fn fts_benchmark_100k() {
 
     let insert_start = Instant::now();
     insert_benchmark_rows(&db, rows);
+    mark_benchmark_filter_rows(&db);
     let insert_elapsed = insert_start.elapsed();
 
     println!(
@@ -169,6 +183,22 @@ fn fts_benchmark_100k() {
         search_timings.len()
     );
 
+    for diagnostics in measure_required_paged_scenarios(&db) {
+        assert!(
+            diagnostics.rows > 0,
+            "benchmark scenario {} should return rows",
+            diagnostics.label
+        );
+        println!(
+            "[fts-bench] label={} query={} total={} elapsed_ms={:.3} rows={}",
+            diagnostics.label,
+            diagnostics.query,
+            diagnostics.total,
+            diagnostics.elapsed_ms,
+            diagnostics.rows
+        );
+    }
+
     drop(db);
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -180,7 +210,8 @@ fn fts_benchmark_100k() {
 
 fn print_diagnostics_line(label: &str, run: usize, diagnostics: &QueryDiagnostics) {
     println!(
-        "[fts-bench] label={label} query={} run={run} matches={} count_ms={:.3} search_ms={:.3} total_ms={:.3} rows={}",
+        "[fts-bench] label={label} scenario={} query={} run={run} matches={} count_ms={:.3} search_ms={:.3} total_ms={:.3} rows={}",
+        diagnostics.label,
         diagnostics.query,
         diagnostics.match_count,
         diagnostics.count_ms,
@@ -221,6 +252,7 @@ fn measure_query(
     let search_ms = duration_ms(search_start.elapsed());
 
     Ok(QueryDiagnostics {
+        label: search_scenario_label(query).to_string(),
         query: query.to_string(),
         match_count,
         count_ms,
@@ -230,6 +262,16 @@ fn measure_query(
     })
 }
 
+fn search_scenario_label(query: &str) -> &'static str {
+    if query == "身份证" {
+        "cjk_search"
+    } else if query == "pdf" {
+        "extension_search"
+    } else {
+        "english_search"
+    }
+}
+
 fn insert_benchmark_rows(db: &Database, rows: usize) {
     for start in (0..rows).step_by(INSERT_BATCH_SIZE) {
         let end = (start + INSERT_BATCH_SIZE).min(rows);
@@ -237,6 +279,77 @@ fn insert_benchmark_rows(db: &Database, rows: usize) {
         db.insert_files(&batch)
             .unwrap_or_else(|error| panic!("insert benchmark rows {start}..{end} failed: {error}"));
     }
+}
+
+fn mark_benchmark_filter_rows(db: &Database) {
+    let conn = Connection::open(db.path()).expect("open benchmark database for filter setup");
+    conn.execute(
+        "UPDATE files SET lifecycle = 'Archive', suggested_action = 'Archive' WHERE extension = 'zip'",
+        [],
+    )
+    .expect("mark archive benchmark rows");
+    conn.execute(
+        "UPDATE files SET suggested_action = 'Review', requires_confirmation = 1 WHERE path LIKE '/benchmark/invoice/%'",
+        [],
+    )
+    .expect("mark review benchmark rows");
+    conn.execute(
+        "UPDATE files SET lifecycle = 'Active' WHERE path LIKE '/benchmark/project/%'",
+        [],
+    )
+    .expect("mark active benchmark rows");
+}
+
+fn measure_required_paged_scenarios(db: &Database) -> Vec<PagedDiagnostics> {
+    let scenarios = [
+        (
+            "scope_query",
+            None,
+            LibraryScope::Roots {
+                roots: vec!["/benchmark/project".to_string()],
+            },
+            None,
+        ),
+        (
+            "filter_query",
+            None,
+            LibraryScope::All,
+            Some(FileLibraryFilter {
+                library_filter: Some(LibraryFilter::Review),
+            }),
+        ),
+        (
+            "query_filter_query",
+            Some("invoice"),
+            LibraryScope::All,
+            Some(FileLibraryFilter {
+                library_filter: Some(LibraryFilter::Review),
+            }),
+        ),
+    ];
+
+    scenarios
+        .into_iter()
+        .map(|(label, query, scope, filter)| {
+            let started = Instant::now();
+            let page = db
+                .get_paged_files_in_scope_with_filter(
+                    Some(50),
+                    Some(0),
+                    query,
+                    &scope,
+                    filter.as_ref(),
+                )
+                .unwrap_or_else(|error| panic!("paged benchmark scenario {label} failed: {error}"));
+            PagedDiagnostics {
+                label,
+                query: query.unwrap_or("*"),
+                total: page.total,
+                elapsed_ms: duration_ms(started.elapsed()),
+                rows: page.files.len(),
+            }
+        })
+        .collect()
 }
 
 fn benchmark_file(index: usize) -> InsertFileRequest {
@@ -292,7 +405,10 @@ fn print_distribution(rows: usize, threshold_ms: f64, explain: bool) {
 
 fn expected_keyword_matches(rows: usize, query: &str) -> usize {
     (0..rows)
-        .filter(|index| benchmark_keyword_extension(*index).0 == query)
+        .filter(|index| {
+            let (keyword, extension) = benchmark_keyword_extension(*index);
+            keyword == query || extension == query
+        })
         .count()
 }
 

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { tauriApi, type OperationProgressPayload, type RuleExecutionSummary } from "../api/tauriApi";
 import { makeTranslator } from "../i18n";
-import type { FileRecord, OperationLog, OperationPreview } from "../types/domain";
+import type { FileRecord, LibraryScope, OperationLog, OperationPreview, OperationPreviewResult } from "../types/domain";
 import { applyPreviewNameOverride, createOperationPreviews, readableError } from "../utils/viewHelpers";
 import { useAppStore } from "./useAppStore";
 import { useFileLibraryStore } from "./useFileLibraryStore";
@@ -16,6 +16,12 @@ export interface OperationQueueStore {
   previewNameOverrides: Record<string, string>;
   previews: OperationPreview[];
   displayPreviews: OperationPreview[];
+  previewScope: LibraryScope | null;
+  previewTotal: number;
+  previewLimit: number;
+  previewOffset: number;
+  previewTruncated: boolean;
+  previewHasMore: boolean;
   previewActionCount: number;
   operationProgress: OperationProgressPayload | null;
   isOperationCanceling: boolean;
@@ -25,6 +31,8 @@ export interface OperationQueueStore {
   initializeOperationQueue: () => Promise<void>;
   loadPersistedOperationLogs: () => Promise<void>;
   syncPreviews: (files: FileRecord[]) => void;
+  setPreviewResult: (result: OperationPreviewResult, scope: LibraryScope) => void;
+  loadMorePreviews: () => Promise<void>;
   setSelectedOperationIds: (ids: Set<string>) => void;
   runDispatch: () => Promise<RuleExecutionSummary>;
   executeSelected: () => Promise<void>;
@@ -48,6 +56,14 @@ function previewActionCount(displayPreviews: OperationPreview[]) {
   return displayPreviews.filter((preview) => preview.status === "pending").length;
 }
 
+function defaultSelectedPreviewIds(previews: OperationPreview[]) {
+  return new Set(
+    previews
+      .filter((preview) => preview.selected_by_default && preview.is_executable !== false)
+      .map((preview) => preview.id)
+  );
+}
+
 export function mergeOperationLogs(persisted: OperationLog[], current: OperationLog[]): OperationLog[] {
   const seen = new Set<string>();
   const merged: OperationLog[] = [];
@@ -65,6 +81,12 @@ export const useOperationQueueStore = create<OperationQueueStore>((set, get) => 
   previewNameOverrides: {},
   previews: [],
   displayPreviews: [],
+  previewScope: null,
+  previewTotal: 0,
+  previewLimit: 0,
+  previewOffset: 0,
+  previewTruncated: false,
+  previewHasMore: false,
   previewActionCount: 0,
   operationProgress: null,
   isOperationCanceling: false,
@@ -102,21 +124,83 @@ export const useOperationQueueStore = create<OperationQueueStore>((set, get) => 
       previews,
       displayPreviews,
       previewNameOverrides: {},
-      selectedOperationIds: new Set(
-        previews.filter((preview) => preview.selected_by_default).map((preview) => preview.id)
-      ),
+      selectedOperationIds: defaultSelectedPreviewIds(previews),
+      previewScope: null,
+      previewTotal: previews.length,
+      previewLimit: previews.length,
+      previewOffset: 0,
+      previewTruncated: false,
+      previewHasMore: false,
       previewActionCount: previewActionCount(displayPreviews)
     });
+  },
+  setPreviewResult: (result, scope) => {
+    const displayPreviews = applyOverrides(result.previews, {});
+    set({
+      previews: result.previews,
+      displayPreviews,
+      previewNameOverrides: {},
+      selectedOperationIds: defaultSelectedPreviewIds(result.previews),
+      previewScope: scope,
+      previewTotal: result.total,
+      previewLimit: result.limit,
+      previewOffset: result.offset,
+      previewTruncated: result.truncated,
+      previewHasMore: result.hasMore,
+      previewActionCount: previewActionCount(displayPreviews)
+    });
+  },
+  loadMorePreviews: async () => {
+    const state = get();
+    if (!state.previewScope || !state.previewHasMore) return;
+
+    const limit = state.previewLimit || 1000;
+    const offset = state.previewOffset + state.previews.length;
+    try {
+      const result = await tauriApi.getOperationPreviewsForScope(
+        state.previewScope,
+        undefined,
+        limit,
+        offset
+      );
+      set((current) => {
+        const seen = new Set(current.previews.map((preview) => preview.id));
+        const appended = result.previews.filter((preview) => !seen.has(preview.id));
+        const previews = [...current.previews, ...appended];
+        const selectedOperationIds = new Set(current.selectedOperationIds);
+        for (const id of defaultSelectedPreviewIds(appended)) {
+          selectedOperationIds.add(id);
+        }
+        const displayPreviews = applyOverrides(previews, current.previewNameOverrides);
+        return {
+          previews,
+          displayPreviews,
+          selectedOperationIds,
+          previewTotal: result.total,
+          previewLimit: result.limit,
+          previewTruncated: result.truncated,
+          previewHasMore: result.hasMore,
+          previewActionCount: previewActionCount(displayPreviews)
+        };
+      });
+    } catch (error) {
+      useAppStore.getState().showError(readableError(error));
+      throw error;
+    }
   },
   setSelectedOperationIds: (selectedOperationIds) => set({ selectedOperationIds }),
   runDispatch: async () => {
     const t = currentT();
     try {
+      const scope = useFileLibraryStore.getState().scope;
       const summary = await tauriApi.executeRulesForScope(
-        useFileLibraryStore.getState().scope,
-        useRulesStore.getState().rules
+        scope,
+        useRulesStore.getState().rules,
+        "inbox_only"
       );
       await useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery);
+      const previews = await tauriApi.getOperationPreviewsForScope(scope);
+      get().setPreviewResult(previews, scope);
       useAppStore.getState().showSuccess(
         `${t("success")}: ${summary.updated.toLocaleString()} / ${summary.scanned.toLocaleString()} (${t("skipped")}: ${summary.skipped.toLocaleString()})`
       );

@@ -1,6 +1,7 @@
 import type { AppSnapshot, FileQuery, FileRecord, LibraryScope, OperationPreview } from "../types/domain";
 import type { Language } from "../i18n";
 import type { ThemeMode, Translator } from "../types/ui";
+import { DEFAULT_SEARCH_HOTKEY, formatHotkeyLabel } from "./hotkeys";
 
 export function filterFiles(files: FileRecord[], query: FileQuery): FileRecord[] {
   const search = query.search?.toLowerCase().trim();
@@ -134,7 +135,7 @@ export function prettyFolderName(value: string): string {
 }
 
 export function defaultPlatformAccelerator(platform: NodeJS.Platform | "browser"): string {
-  return platform === "darwin" ? "⌘⇧Space" : "Ctrl+Shift+Space";
+  return formatHotkeyLabel(DEFAULT_SEARCH_HOTKEY, platform);
 }
 
 export function createOperationPreviews(files: FileRecord[]): OperationPreview[] {

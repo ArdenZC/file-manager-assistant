@@ -51,6 +51,7 @@ export type ClassificationStatus = "unclassified" | "classified";
 export type FolderNamingLanguage = "en" | "zh";
 export type CloseBehavior = "ask" | "minimize" | "quit";
 export type RestoreRetentionDays = 15 | 30 | 60 | 90;
+export type RuleExecutionMode = "inbox_only" | "all_changed_or_rule_changed";
 
 export interface ScanRootSetting {
   id: string;
@@ -65,12 +66,19 @@ export type LibraryScope =
   | { kind: "roots"; roots: string[] }
   | { kind: "all" };
 
+export type LibraryFilter = "all" | "active" | "archive" | "review";
+
+export interface FileLibraryFilters {
+  libraryFilter?: LibraryFilter;
+}
+
 export interface AppSettings {
   closeBehavior: CloseBehavior;
   folderNamingLanguage: FolderNamingLanguage;
   defaultScanFolders: ScanRootSetting[];
   restoreRetentionDays: RestoreRetentionDays;
   launchAtLogin: boolean;
+  searchHotkey: string;
 }
 
 export interface FileRecord {
@@ -232,6 +240,7 @@ export interface DashboardStats {
 export interface OperationPreview {
   id: string;
   fileId: string;
+  file_id?: string;
   operation_type: "move" | "rename" | "move_rename";
   source_path: string;
   target_path: string;
@@ -247,6 +256,17 @@ export interface OperationPreview {
   blocking_reason?: string;
   editable_new_name?: boolean;
   batch_id?: string;
+  target_parent_exists?: boolean;
+  will_create_parent?: boolean;
+}
+
+export interface OperationPreviewResult {
+  previews: OperationPreview[];
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+  hasMore: boolean;
 }
 
 export interface OperationLog {

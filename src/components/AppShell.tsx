@@ -149,6 +149,7 @@ function CommandLauncher({ standalone = false }: { standalone?: boolean }) {
       onClose={closeCommand}
       platform={platform}
       t={t}
+      onError={onError}
       standalone={standalone}
     />
   );

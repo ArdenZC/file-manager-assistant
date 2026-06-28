@@ -20,8 +20,8 @@ export function ScannerView() {
   const handleScan = useScanManagerStore((state) => state.handleScan);
   const cancelScan = useScanManagerStore((state) => state.cancelScan);
   const scanProgress = scanState.progress;
-  const scopedTotalSize = files.reduce((sum, file) => sum + file.size, 0);
-  const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, scopedTotalSize / stats.diskTotalSize) : 0;
+  const scopedTotalSize = stats.totalSize;
+  const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, stats.totalSize / stats.diskTotalSize) : 0;
   const clutterItems = files.filter((file) => file.requires_confirmation || file.is_duplicate || file.size > 1024 * 1024 * 1024).length;
   const clutterRatio = files.length ? Math.min(1, clutterItems / files.length) : 0;
   const scopeLabel = libraryScopeLabel(scope, t("allIndexedFiles"), selectedFolders[0] ?? t("userSpaceHint"));

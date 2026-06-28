@@ -8,11 +8,11 @@ import { useDebounce } from "../../hooks/useDebounce";
 import { useAppStore } from "../../store/useAppStore";
 import { LIBRARY_PAGE_SIZE, useFileLibraryStore } from "../../store/useFileLibraryStore";
 import { useScanManagerStore } from "../../store/useScanManagerStore";
-import type { FileRecord } from "../../types/domain";
+import type { FileRecord, LibraryFilter } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { libraryScopeLabel } from "../../utils/viewHelpers";
 import { shouldVirtualizeList } from "../../utils/virtualization";
-import { cn, glassButton, inputSurface, statusToast, virtualList, virtualSpacer } from "../../utils/tw";
+import { cn, emptyState, glassButton, glassButtonPrimary, inputSurface, statusToast, virtualList, virtualSpacer } from "../../utils/tw";
 import { listMotion, mutedText, pageSurface, segmentButton } from "../shared/ui";
 import { AssetCard } from "./AssetCard";
 
@@ -34,6 +34,7 @@ export function VaultView() {
   const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const requestIdRef = useRef(0);
   const hasMore = page.files.length < page.total;
@@ -43,7 +44,8 @@ export function VaultView() {
     setIsLoading(true);
     setError("");
     try {
-      const next = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, debouncedSearchQuery, scope);
+      const filters = libraryFilter === "all" ? undefined : { libraryFilter };
+      const next = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, debouncedSearchQuery, scope, filters);
       if (requestId !== requestIdRef.current) return;
       setPage((current) => append
         ? { ...next, files: [...current.files, ...next.files], offset: current.offset }
@@ -56,7 +58,7 @@ export function VaultView() {
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [debouncedSearchQuery, loadStats, scope, setPage, setSelectedFileId]);
+  }, [debouncedSearchQuery, libraryFilter, loadStats, scope, setPage, setSelectedFileId]);
 
   useEffect(() => {
     void loadPage(0, false);
@@ -75,13 +77,14 @@ export function VaultView() {
   }, [hasMore, isLoading, loadPage, page.files.length]);
 
   const filters = [
-    { key: "", label: t("libraryAllFiles"), description: t("libraryAllFilesDesc") },
+    { key: "all", label: t("libraryAllFiles"), description: t("libraryAllFilesDesc") },
     { key: "active", label: t("libraryActiveFiles"), description: t("libraryActiveFilesDesc") },
     { key: "archive", label: t("libraryArchiveFiles"), description: t("libraryArchiveFilesDesc") },
     { key: "review", label: t("libraryReviewFiles"), description: t("libraryReviewFilesDesc") }
-  ];
+  ] satisfies Array<{ key: LibraryFilter; label: string; description: string }>;
   const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
   const scopedSearchPlaceholder = scope.kind === "all" ? t("librarySearchPlaceholder") : t("librarySearchPlaceholderScoped");
+  const isEmptyCurrentScanScope = scope.kind === "current_scan" && scope.roots.length === 0;
 
   return (
     <div className={cn(pageSurface, "space-y-4")}>
@@ -100,12 +103,31 @@ export function VaultView() {
           </button>
         </div>
       </div>
+      {isEmptyCurrentScanScope ? (
+        <div className={cn(emptyState, "grid min-h-72 place-items-center gap-4 px-6 text-center")}>
+          <div>
+            <strong className="block text-base text-[var(--ink)]">{t("noCurrentScanTitle")}</strong>
+            <span className="mt-2 block max-w-xl text-sm text-[var(--muted)]">{t("noCurrentScanDesc")}</span>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            <button className={glassButtonPrimary} onClick={() => void handleChooseFolders()}>
+              <FolderSearch size={16} />
+              <span>{t("chooseFolderScan")}</span>
+            </button>
+            <button className={glassButton} onClick={() => setScope({ kind: "all" })}>
+              <Layers size={16} />
+              <span>{t("viewAllIndexedFiles")}</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="flex flex-wrap gap-2">
         {filters.map((filter) => (
           <button
             key={filter.label}
-            className={segmentButton(searchQuery === filter.key)}
-            onClick={() => setSearchQuery(filter.key)}
+            className={segmentButton(libraryFilter === filter.key)}
+            onClick={() => setLibraryFilter(filter.key)}
           >
             {filter.label}
           </button>
@@ -116,7 +138,7 @@ export function VaultView() {
           <span
             className={cn(
               "rounded-2xl border border-[var(--line)] bg-white/25 p-3 text-sm text-[var(--muted)] dark:bg-white/5",
-              searchQuery === filter.key && "border-blue-400/50 bg-blue-500/10 text-[var(--ink)]"
+              libraryFilter === filter.key && "border-blue-400/50 bg-blue-500/10 text-[var(--ink)]"
             )}
             key={`${filter.key}-description`}
           >
@@ -153,6 +175,8 @@ export function VaultView() {
           <Plus size={16} />
           {t("loadMoreFiles").replace("{count}", String(Math.min(page.limit, page.total - page.files.length)))}
         </button>
+      )}
+        </>
       )}
     </div>
   );

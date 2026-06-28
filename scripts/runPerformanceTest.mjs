@@ -47,6 +47,15 @@ const dbFiles = [
   "src-tauri/src/db/queries/rules_repo.rs"
 ];
 const db = dbFiles.map(read).join("\n");
+const benchmarkSource = read("src-tauri/tests/fts_benchmark.rs");
+const requiredBenchmarkScenarios = [
+  "english_search",
+  "cjk_search",
+  "extension_search",
+  "scope_query",
+  "filter_query",
+  "query_filter_query"
+];
 
 assert(api.includes("getPagedFiles"), "Tauri API must expose getPagedFiles.");
 assert(api.includes("getStatsSummary"), "Tauri API must expose getStatsSummary.");
@@ -57,6 +66,9 @@ assert(fileLibraryStore.includes("LIBRARY_PAGE_SIZE = 50"), "File library page s
 assert(!runtimeUi.includes("demoData"), "Runtime UI must not depend on demo data.");
 assert(!runtimeUi.includes("window.fileManager"), "Runtime UI must not depend on Electron preload APIs.");
 assert(!runtimeUi.includes("snapshot"), "Runtime UI must not keep an all-files snapshot.");
+for (const scenario of requiredBenchmarkScenarios) {
+  assert(benchmarkSource.includes(scenario), `SQLite benchmark must cover ${scenario}.`);
+}
 
 if (!process.exitCode) {
   console.log("Architecture guard passed: paged IPC, bounded library loading, and no legacy full snapshot path.");

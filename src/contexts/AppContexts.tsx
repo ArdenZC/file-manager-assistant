@@ -23,6 +23,7 @@ export interface SettingsContextValue extends AppSettingsContextState {
   setDefaultScanFolders: (next: ScanRootSetting[]) => Promise<boolean>;
   setRestoreRetentionDays: (next: RestoreRetentionDays) => Promise<boolean>;
   setLaunchAtLogin: (next: boolean) => Promise<boolean>;
+  setSearchHotkey: (next: string) => Promise<boolean>;
 }
 
 export interface RulesContextValue {

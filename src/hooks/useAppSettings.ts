@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { tauriApi } from "../api/tauriApi";
 import type { AppSettings, ScanRootSetting } from "../types/domain";
+import { DEFAULT_SEARCH_HOTKEY } from "../utils/hotkeys";
 import { readableError } from "../utils/viewHelpers";
 
 const defaultFormatSettingsError = (error: unknown) => readableError(error);
@@ -10,7 +11,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   folderNamingLanguage: "en",
   defaultScanFolders: [],
   restoreRetentionDays: 30,
-  launchAtLogin: false
+  launchAtLogin: false,
+  searchHotkey: DEFAULT_SEARCH_HOTKEY
 };
 
 interface UseAppSettingsOptions {

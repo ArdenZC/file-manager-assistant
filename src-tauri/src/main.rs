@@ -34,8 +34,6 @@ fn main() {
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             zen_canvas_tauri::app_control::setup_search_window(app)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
-            zen_canvas_tauri::app_control::setup_global_search_shortcut(app)
-                .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             let app_settings = settings::get_app_settings(&db)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             let launch_at_login = app.autolaunch();
@@ -52,6 +50,12 @@ fn main() {
             };
             db.prune_operation_logs(app_settings.restore_retention_days)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            if let Err(error) = zen_canvas_tauri::app_control::setup_global_search_shortcut(
+                app,
+                &app_settings.search_hotkey,
+            ) {
+                eprintln!("Global search hotkey setup failed (non-fatal): {error}");
+            }
             let watcher_manager = app.state::<FileWatcherManager>();
             if let Err(error) = reload_file_watcher_for_settings(
                 app.handle().clone(),
@@ -69,6 +73,7 @@ fn main() {
             zen_canvas_tauri::db::upsert_files_by_paths,
             zen_canvas_tauri::db::search_files,
             zen_canvas_tauri::db::get_paged_files,
+            zen_canvas_tauri::db::get_operation_previews_for_scope,
             zen_canvas_tauri::db::get_stats_summary,
             zen_canvas_tauri::db::get_operation_logs,
             zen_canvas_tauri::db::get_user_rules,
