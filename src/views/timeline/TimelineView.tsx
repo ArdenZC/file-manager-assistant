@@ -66,12 +66,12 @@ export function TimelineView() {
             <span>{isExecuting ? t("executingOperations") : t("executeSelected")} / {selectedIds.size}</span>
           </button>
         </div>
-        <div className="mb-4 grid gap-2 text-sm text-[var(--muted)] sm:grid-cols-5">
-          <span className="rounded-xl border border-[var(--line)] bg-white/18 px-3 py-2 dark:bg-white/5">{t("previewScopeItems")}: <strong className="text-[var(--ink)]">{coveredTotal.toLocaleString()}</strong></span>
-          <span className="rounded-xl border border-[var(--line)] bg-white/18 px-3 py-2 dark:bg-white/5">{t("previewMainFolders")}: <strong className="text-[var(--ink)]">{groups.length}</strong></span>
-          <span className="rounded-xl border border-[var(--line)] bg-white/18 px-3 py-2 dark:bg-white/5">{t("executableItems")}: <strong className="text-[var(--ink)]">{executableCount}</strong></span>
-          <span className="rounded-xl border border-[var(--line)] bg-white/18 px-3 py-2 dark:bg-white/5">{t("blockedItems")}: <strong className="text-[var(--ink)]">{blockedCount}</strong></span>
-          <span className="rounded-xl border border-[var(--line)] bg-white/18 px-3 py-2 dark:bg-white/5">{t("confirmationItems")}: <strong className="text-[var(--ink)]">{confirmationCount}</strong></span>
+        <div className="mb-4 grid grid-cols-2 gap-2 text-sm text-[var(--muted)] md:grid-cols-3 xl:grid-cols-5">
+          <MetricChip label={t("previewScopeItems")} value={coveredTotal.toLocaleString()} />
+          <MetricChip label={t("previewMainFolders")} value={groups.length} />
+          <MetricChip label={t("executableItems")} value={executableCount} />
+          <MetricChip label={t("blockedItems")} value={blockedCount} />
+          <MetricChip label={t("confirmationItems")} value={confirmationCount} />
         </div>
         {previewTruncated && (
           <div className="mb-4 rounded-xl border border-amber-400/35 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-200">
@@ -169,6 +169,14 @@ export function TimelineView() {
         )}
       </section>
     </div>
+  );
+}
+
+function MetricChip({ label, value }: { label: string; value: string | number }) {
+  return (
+    <span className="rounded-xl border border-[var(--line)] bg-white/18 px-3 py-2 dark:bg-white/5">
+      {label}: <strong className="text-[var(--ink)]">{value}</strong>
+    </span>
   );
 }
 

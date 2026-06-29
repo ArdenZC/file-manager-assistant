@@ -106,7 +106,7 @@ export function HubView() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(300px,0.8fr)_minmax(0,1.4fr)] gap-4 overflow-hidden">
+    <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-auto xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.4fr)] xl:overflow-hidden">
       <section className={cn(panelSurface, "flex flex-col gap-4 overflow-hidden")}>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -126,7 +126,7 @@ export function HubView() {
         </motion.button>
       </section>
 
-      <motion.section className="grid min-h-0 grid-cols-2 gap-4 overflow-auto pr-1" variants={listMotion} initial="hidden" animate="show">
+      <motion.section className="grid min-h-0 grid-cols-1 gap-4 overflow-auto pr-1 xl:grid-cols-2" variants={listMotion} initial="hidden" animate="show">
         {buckets.map((bucket) => {
           const bucketFiles = bucketedFiles[bucket.key];
           return (

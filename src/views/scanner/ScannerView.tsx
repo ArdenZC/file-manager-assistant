@@ -34,16 +34,32 @@ export function ScannerView() {
         <div
           className={cn(
             "grid h-72 w-72 place-items-center rounded-full p-4 shadow-[var(--shadow-strong)]",
-            isScanning && "animate-pulse"
+            isScanning && "shadow-blue-500/12"
           )}
           style={{
-            background: `conic-gradient(#3b82f6 0 ${Math.round(diskUsageRatio * 100)}%, rgba(59,130,246,0.10) ${Math.round(diskUsageRatio * 100)}% 100%)`
+            background: isScanning
+              ? "linear-gradient(135deg, rgba(59,130,246,0.34), rgba(16,185,129,0.16))"
+              : `conic-gradient(#3b82f6 0 ${Math.round(diskUsageRatio * 100)}%, rgba(59,130,246,0.10) ${Math.round(diskUsageRatio * 100)}% 100%)`
           } as CSSProperties}
         >
           <div className="grid h-full w-full place-items-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-8 backdrop-blur-3xl">
             {isScanning ? (
-              <div className="text-sm font-medium text-blue-600 dark:text-blue-300">
-                <span>{t("scanning")}...</span>
+              <div className="grid gap-4 text-center">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600 dark:text-blue-300">{t("scanning")}</span>
+                <strong className="text-4xl font-semibold text-[var(--ink)]">
+                  {(scanProgress?.files ?? 0).toLocaleString()}
+                </strong>
+                <div className="grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                  <span className="rounded-full border border-[var(--line)] bg-white/32 px-2 py-1 dark:bg-white/5">
+                    {t("files")}
+                  </span>
+                  <span className="rounded-full border border-[var(--line)] bg-white/32 px-2 py-1 dark:bg-white/5">
+                    {t("skipped")}: {(scanProgress?.skipped ?? 0).toLocaleString()}
+                  </span>
+                  <span className="col-span-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-200">
+                    {t("scanWarnings").replace("{count}", warningCount.toLocaleString())}
+                  </span>
+                </div>
               </div>
             ) : (
               <>

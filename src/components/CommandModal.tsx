@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 import { ChevronRight, File, Search, X } from "lucide-react";
 import { tauriApi } from "../api/tauriApi";
 import type { FileRecord, LibraryScope } from "../types/domain";
 import type { Translator, View } from "../types/ui";
-import { cn, emptyState, toneClasses } from "../utils/tw";
+import { cn, toneClasses } from "../utils/tw";
 import { readableError } from "../utils/viewHelpers";
 
 const keyBadge =
   "rounded-md border border-[var(--line-dark)] bg-white/32 px-1.5 py-0.5 text-[11px] font-medium text-[var(--quiet)] dark:bg-white/5";
+const commandHintText = "text-[11px] leading-tight text-[var(--quiet)]";
 
 export async function activateCommandNavigation({
   standalone,
@@ -234,11 +235,7 @@ export function CommandModal({
           )}
           <kbd className={cn(keyBadge, "px-2 py-1")}>ESC</kbd>
         </div>
-        {searchScopeLabel && (
-          <div className="border-t border-[var(--line-dark)] px-5 py-2 text-xs text-[var(--muted)]">
-            {searchScopeLabel}
-          </div>
-        )}
+        {searchScopeLabel && <div className={cn(commandHintText, "px-5 pb-2 pt-1.5")}>{searchScopeLabel}</div>}
         {showResults && (
           <div className="grid gap-0">
             <div className="px-3 py-3">
@@ -282,32 +279,62 @@ export function CommandModal({
                 })}
               </div>
             </div>
-            <div className="flex items-center justify-between gap-4 border-t border-[var(--line-dark)] px-5 py-3 text-xs text-[var(--muted)]">
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--line-dark)] px-5 py-3 text-xs text-[var(--muted)]">
               <span>{t("matchesFound").replace("{count}", String(visibleResults.length))}</span>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="inline-flex items-center gap-1"><kbd className={keyBadge}>↵</kbd>{t("openResult")}</span>
-                <span className="inline-flex items-center gap-1"><kbd className={keyBadge}>{locateKey}</kbd>{t("revealPhysical")}</span>
-                <span className="inline-flex items-center gap-1"><kbd className={keyBadge}>⇥</kbd>{t("sortingAdvice")}</span>
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                <ShortcutHint badge="↵" label={t("openResult")} />
+                <ShortcutHint badge={locateKey} label={t("revealPhysical")} />
+                <ShortcutHint badge="⇥" label={t("sortingAdvice")} />
               </div>
             </div>
           </div>
         )}
         {trimmedSearch && queryState === "pending" && (
           <div className="px-4 pb-4">
-            <div className={cn(emptyState, "min-h-20")}>{t("commandSearching")}</div>
+            <CommandEmptyState>{t("commandSearching")}</CommandEmptyState>
           </div>
         )}
         {trimmedSearch && queryState === "failed" && (
           <div className="px-4 pb-4">
-            <div className={cn(emptyState, "min-h-20")}>{commandError || t("commandSearchFailed")}</div>
+            <CommandEmptyState tone="error">{commandError || t("commandSearchFailed")}</CommandEmptyState>
           </div>
         )}
         {trimmedSearch && queryState === "done" && !results.length && (
           <div className="px-4 pb-4">
-            <div className={cn(emptyState, "min-h-20")}>{searchScopeEmptyMessage || t("commandNoResults")}</div>
+            <CommandEmptyState>{searchScopeEmptyMessage || t("commandNoResults")}</CommandEmptyState>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ShortcutHint({ badge, label }: { badge: string; label: string }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap">
+      <kbd className={keyBadge}>{badge}</kbd>
+      <span className="hidden max-w-24 truncate sm:inline">{label}</span>
+    </span>
+  );
+}
+
+function CommandEmptyState({
+  children,
+  tone = "neutral"
+}: {
+  children: ReactNode;
+  tone?: "neutral" | "error";
+}) {
+  return (
+    <div
+      className={cn(
+        "grid min-h-16 place-items-center rounded-2xl border border-dashed px-4 py-3 text-center text-sm",
+        tone === "error"
+          ? "border-red-400/35 bg-red-500/8 text-red-700 dark:text-red-200"
+          : "border-[var(--line-dark)] bg-white/16 text-[var(--muted)] dark:bg-white/5"
+      )}
+    >
+      {children}
     </div>
   );
 }

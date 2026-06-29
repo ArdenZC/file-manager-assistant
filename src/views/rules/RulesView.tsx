@@ -130,7 +130,7 @@ export function RulesView() {
   }
 
   return (
-    <div className={cn(pageSurface, "grid grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] gap-4 overflow-hidden")}>
+    <div className={cn(pageSurface, "grid grid-cols-1 gap-4 overflow-auto xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] xl:overflow-hidden")}>
       <section className={panelSurface}>
         <SectionTitle title={t("ruleBuilder")} body={t("customDesc")} />
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--line)] bg-white/25 p-3 text-sm dark:bg-white/5">

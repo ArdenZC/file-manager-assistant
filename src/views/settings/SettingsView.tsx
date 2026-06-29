@@ -22,7 +22,7 @@ import type {
   SearchScopeMode
 } from "../../types/domain";
 import { acceleratorFromKeyboardEvent, formatHotkeyLabel, isValidSearchHotkey } from "../../utils/hotkeys";
-import { cn, glassButtonDanger, statusToast } from "../../utils/tw";
+import { cn, glassButton, glassButtonDanger, statusToast } from "../../utils/tw";
 import { compactRowSurface, mutedText, pageSurface, panelSurface, quietText, rowSurface, segmented, segmentButton, sourceBadge, toggleSwitch, SectionTitle } from "../shared/ui";
 
 export function SettingsView() {
@@ -202,7 +202,7 @@ export function SettingsView() {
   }
 
   return (
-    <div className={cn(pageSurface, "grid grid-cols-[minmax(0,1fr)_minmax(300px,0.7fr)] gap-4 overflow-hidden")}>
+    <div className={cn(pageSurface, "grid grid-cols-1 gap-4 overflow-auto 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.7fr)] 2xl:overflow-hidden")}>
       <section className={cn(panelSurface, "overflow-auto")}>
         <SectionTitle title={t("settings")} body={t("settingsDesc")} />
         <div className="grid gap-3">
@@ -231,7 +231,7 @@ export function SettingsView() {
         <div className={cn(rowSurface, "grid gap-3")}>
           <div className="flex items-start justify-between gap-3">
             <div><strong className="block text-sm">{t("defaultScanFolders")}</strong><span className={mutedText}>{t("defaultScanFoldersDesc")}</span></div>
-            <button className={segmentButton(false)} onClick={() => void addDefaultScanFolder()}>
+            <button className={glassButton} onClick={() => void addDefaultScanFolder()}>
               <FolderPlus size={15} />
               <span>{t("addScanFolder")}</span>
             </button>
@@ -244,7 +244,7 @@ export function SettingsView() {
                   <span className="block truncate text-xs text-[var(--muted)]">{root.path}</span>
                 </div>
                 <button className={toggleSwitch(root.enabled)} onClick={() => void setScanRootEnabled(root, !root.enabled)} aria-label={root.enabled ? t("disableScanFolder") : t("enableScanFolder")}><i /></button>
-                <button className={segmentButton(false)} onClick={() => void scanRootNow(root)} title={t("scanNow")}>
+                <button className={cn(glassButton, "min-h-9 px-3 py-1.5")} onClick={() => void scanRootNow(root)} title={t("scanNow")}>
                   <Play size={14} />
                   <span>{t("scanNow")}</span>
                 </button>
@@ -264,7 +264,7 @@ export function SettingsView() {
             <span className="rounded-xl border border-[var(--line)] bg-white/25 px-3 py-1.5 text-sm font-medium text-[var(--ink)] dark:bg-white/5">{hotkey}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button className={segmentButton(isRecordingHotkey)} onClick={() => setIsRecordingHotkey(true)}>
+            <button className={cn(glassButton, isRecordingHotkey && "border-blue-400/45 bg-blue-500/10 text-blue-700 dark:text-blue-200")} onClick={() => setIsRecordingHotkey(true)}>
               <Keyboard size={14} />
               <span>{t("changeHotkey")}</span>
             </button>
@@ -301,7 +301,7 @@ export function SettingsView() {
           {searchScopeMode === "custom_roots" && (
             <div className="grid gap-2">
               <div className="flex justify-end">
-                <button className={segmentButton(false)} onClick={() => void addCustomSearchRoot()}>
+                <button className={glassButton} onClick={() => void addCustomSearchRoot()}>
                   <FolderPlus size={15} />
                   <span>{t("addSearchFolder")}</span>
                 </button>

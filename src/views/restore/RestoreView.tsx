@@ -43,7 +43,7 @@ export function RestoreView() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)] gap-4 overflow-hidden">
+    <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-auto xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)] xl:overflow-hidden">
       <section className={cn(panelSurface, "overflow-auto")}>
         <SectionTitle title={t("restoreRecords")} body={t("restoreDesc")} />
         {batches.length ? (
