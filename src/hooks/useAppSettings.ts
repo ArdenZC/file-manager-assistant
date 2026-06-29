@@ -135,8 +135,11 @@ export function resolveEffectiveSearchScope(
   currentLibraryScope: LibraryScope
 ): LibraryScope {
   if (settings.searchScopeMode === "all") return { kind: "all" };
-  if (settings.searchScopeMode === "current_scan") return currentLibraryScope;
-  return { kind: "roots", roots: enabledSearchRootPaths(settings.customSearchRoots) };
+  if (settings.searchScopeMode === "custom_roots") {
+    return { kind: "roots", roots: enabledSearchRootPaths(settings.customSearchRoots) };
+  }
+  if (currentLibraryScope.kind === "current_scan") return currentLibraryScope;
+  return { kind: "current_scan", roots: [] };
 }
 
 function createRootSetting<T extends ScanRootSetting | SearchRootSetting>(

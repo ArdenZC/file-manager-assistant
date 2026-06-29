@@ -189,7 +189,10 @@ function commandSearchScopeEmptyMessage(settings: AppSettings, currentLibrarySco
   if (settings.searchScopeMode === "custom_roots" && !settings.customSearchRoots.some((root) => root.enabled && root.path.trim())) {
     return t("searchScopeCustomEmpty");
   }
-  if (settings.searchScopeMode === "current_scan" && currentLibraryScope.kind === "current_scan" && currentLibraryScope.roots.length === 0) {
+  if (
+    settings.searchScopeMode === "current_scan" &&
+    (currentLibraryScope.kind !== "current_scan" || currentLibraryScope.roots.length === 0)
+  ) {
     return t("searchScopeCurrentScanEmpty");
   }
   return "";

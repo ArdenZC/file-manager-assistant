@@ -104,8 +104,14 @@ describe("app settings helpers", () => {
 
     expect(resolveEffectiveSearchScope(allSettings, currentScanScope)).toEqual({ kind: "all" });
     expect(resolveEffectiveSearchScope(currentSettings, currentScanScope)).toEqual(currentScanScope);
-    expect(resolveEffectiveSearchScope(currentSettings, { kind: "all" })).toEqual({ kind: "all" });
-    expect(resolveEffectiveSearchScope(currentSettings, rootsScope)).toEqual(rootsScope);
+    expect(resolveEffectiveSearchScope(currentSettings, { kind: "all" })).toEqual({
+      kind: "current_scan",
+      roots: []
+    });
+    expect(resolveEffectiveSearchScope(currentSettings, rootsScope)).toEqual({
+      kind: "current_scan",
+      roots: []
+    });
     expect(resolveEffectiveSearchScope(customSettings, currentScanScope)).toEqual({
       kind: "roots",
       roots: ["D:/Downloads"]
