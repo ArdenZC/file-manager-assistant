@@ -18,6 +18,8 @@ import type {
   FolderNamingLanguage,
   RestoreRetentionDays,
   ScanRootSetting,
+  SearchRootSetting,
+  SearchScopeMode,
   Rule
 } from "../types/domain";
 import { applySearchNavigation } from "../utils/searchNavigation";
@@ -166,7 +168,30 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
   const setSearchHotkey = useCallback(
     async (next: string) => {
       const savedSettings = await updateSettings({ searchHotkey: next });
-      return savedSettings.searchHotkey === next;
+      const saved = savedSettings.searchHotkey === next;
+      if (saved) {
+        try {
+          const status = await tauriApi.registerGlobalSearchHotkey(next);
+          useAppStore.getState().setGlobalHotkeyError(status.error ?? "");
+        } catch (error) {
+          useAppStore.getState().setGlobalHotkeyError(readableError(error));
+        }
+      }
+      return saved;
+    },
+    [updateSettings]
+  );
+  const setSearchScopeMode = useCallback(
+    async (next: SearchScopeMode) => {
+      const savedSettings = await updateSettings({ searchScopeMode: next });
+      return savedSettings.searchScopeMode === next;
+    },
+    [updateSettings]
+  );
+  const setCustomSearchRoots = useCallback(
+    async (next: SearchRootSetting[]) => {
+      const savedSettings = await updateSettings({ customSearchRoots: next });
+      return arraysEqual(savedSettings.customSearchRoots, next);
     },
     [updateSettings]
   );
@@ -234,7 +259,9 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     setDefaultScanFolders,
     setRestoreRetentionDays,
     setLaunchAtLogin,
-    setSearchHotkey
+    setSearchHotkey,
+    setSearchScopeMode,
+    setCustomSearchRoots
   }), [
     appSettings,
     isLoadingSettings,
@@ -243,7 +270,9 @@ export function AppRuntimeProviders({ children }: { children: ReactNode }) {
     setDefaultScanFolders,
     setRestoreRetentionDays,
     setLaunchAtLogin,
-    setSearchHotkey
+    setSearchHotkey,
+    setSearchScopeMode,
+    setCustomSearchRoots
   ]);
   const rulesContextValue = useMemo(() => ({
     rules,

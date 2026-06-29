@@ -1,15 +1,26 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderPlus, Keyboard, Play, Trash2 } from "lucide-react";
+import { tauriApi } from "../../api/tauriApi";
 import { useChromeContext, useSettingsContext } from "../../contexts/AppContexts";
 import {
+  removeSearchRoot,
   removeDefaultScanRoot,
+  toggleSearchRoot,
   toggleDefaultScanRoot,
+  upsertSearchRoot,
   upsertDefaultScanRoot
 } from "../../hooks/useAppSettings";
 import { useScanManagerStore } from "../../store/useScanManagerStore";
 import { useAppStore } from "../../store/useAppStore";
-import type { CloseBehavior, FolderNamingLanguage, RestoreRetentionDays, ScanRootSetting } from "../../types/domain";
+import type {
+  CloseBehavior,
+  FolderNamingLanguage,
+  RestoreRetentionDays,
+  ScanRootSetting,
+  SearchRootSetting,
+  SearchScopeMode
+} from "../../types/domain";
 import { acceleratorFromKeyboardEvent, formatHotkeyLabel, isValidSearchHotkey } from "../../utils/hotkeys";
 import { cn, statusToast } from "../../utils/tw";
 import { mutedText, pageSurface, panelSurface, quietText, segmented, segmentButton, sourceBadge, toggleSwitch, SectionTitle } from "../shared/ui";
@@ -31,19 +42,38 @@ export function SettingsView() {
       defaultScanFolders,
       restoreRetentionDays,
       launchAtLogin,
-      searchHotkey
+      searchHotkey,
+      searchScopeMode,
+      customSearchRoots
     },
     setFolderNamingLanguage,
     setDefaultScanFolders,
     setRestoreRetentionDays,
     setLaunchAtLogin,
-    setSearchHotkey
+    setSearchHotkey,
+    setSearchScopeMode,
+    setCustomSearchRoots
   } = useSettingsContext();
   const scanPath = useScanManagerStore((state) => state.scanPath);
   const globalHotkeyError = useAppStore((state) => state.globalHotkeyError);
+  const setGlobalHotkeyError = useAppStore((state) => state.setGlobalHotkeyError);
   const hotkey = formatHotkeyLabel(searchHotkey, platform);
   const [settingsStatus, setSettingsStatus] = useState("");
   const [isRecordingHotkey, setIsRecordingHotkey] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    void tauriApi.getGlobalHotkeyStatus().then((status) => {
+      if (!disposed) {
+        setGlobalHotkeyError(status?.error ?? "");
+      }
+    }).catch(() => {
+      // Browser previews and test shells may not expose desktop-only commands.
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [setGlobalHotkeyError]);
 
   async function updateCloseBehavior(next: CloseBehavior) {
     const saved = await setCloseBehavior(next);
@@ -95,6 +125,42 @@ export function SettingsView() {
     }
   }
 
+  async function updateSearchScopeMode(next: SearchScopeMode) {
+    const saved = await setSearchScopeMode(next);
+    if (saved) {
+      setSettingsStatus(t("settingSaved"));
+    }
+  }
+
+  async function addCustomSearchRoot() {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: t("folderPickerTitle")
+    });
+    const path = Array.isArray(selectedPath) ? selectedPath[0] : selectedPath;
+    if (!path?.trim()) return;
+
+    const saved = await setCustomSearchRoots(upsertSearchRoot(customSearchRoots, path));
+    if (saved) {
+      setSettingsStatus(t("settingSaved"));
+    }
+  }
+
+  async function setSearchRootEnabled(root: SearchRootSetting, enabled: boolean) {
+    const saved = await setCustomSearchRoots(toggleSearchRoot(customSearchRoots, root.id, enabled));
+    if (saved) {
+      setSettingsStatus(t("settingSaved"));
+    }
+  }
+
+  async function deleteSearchRoot(root: SearchRootSetting) {
+    const saved = await setCustomSearchRoots(removeSearchRoot(customSearchRoots, root.id));
+    if (saved) {
+      setSettingsStatus(t("settingSaved"));
+    }
+  }
+
   async function scanRootNow(root: ScanRootSetting) {
     await scanPath(root.path);
   }
@@ -114,7 +180,7 @@ export function SettingsView() {
 
     const saved = await setSearchHotkey(next);
     if (saved) {
-      setSettingsStatus(`${t("hotkeySaved")} · ${t("hotkeyRestartHint")}`);
+      setSettingsStatus(t("hotkeySaved"));
       setIsRecordingHotkey(false);
     }
   }
@@ -221,7 +287,42 @@ export function SettingsView() {
               {t("recordingHotkey")}
             </div>
           )}
-          <span className={quietText}>{globalHotkeyError ? t("hotkeyConflictHint") : t("hotkeyRestartHint")}</span>
+          <span className={quietText}>{globalHotkeyError ? t("hotkeyConflictHint") : t("hotkeyActiveHint")}</span>
+        </div>
+        <div className="grid gap-3 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
+          <div className="flex items-start justify-between gap-3">
+            <div><strong className="block text-sm">{t("searchScopeSettings")}</strong><span className={mutedText}>{t("searchScopeSettingsDesc")}</span></div>
+            <div className={segmented}>
+              <button className={segmentButton(searchScopeMode === "all")} onClick={() => void updateSearchScopeMode("all")}>{t("searchScopeAllIndexed")}</button>
+              <button className={segmentButton(searchScopeMode === "current_scan")} onClick={() => void updateSearchScopeMode("current_scan")}>{t("searchScopeCurrentScan")}</button>
+              <button className={segmentButton(searchScopeMode === "custom_roots")} onClick={() => void updateSearchScopeMode("custom_roots")}>{t("searchScopeCustomRoots")}</button>
+            </div>
+          </div>
+          {searchScopeMode === "custom_roots" && (
+            <div className="grid gap-2">
+              <div className="flex justify-end">
+                <button className={segmentButton(false)} onClick={() => void addCustomSearchRoot()}>
+                  <FolderPlus size={15} />
+                  <span>{t("addSearchFolder")}</span>
+                </button>
+              </div>
+              {customSearchRoots.length ? customSearchRoots.map((root) => (
+                <div key={root.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-xl border border-[var(--line-dark)] bg-white/20 px-3 py-2 dark:bg-white/5">
+                  <div className="min-w-0 text-left">
+                    <strong className="block truncate text-sm">{root.label}</strong>
+                    <span className="block truncate text-xs text-[var(--muted)]">{root.path}</span>
+                  </div>
+                  <button className={toggleSwitch(root.enabled)} onClick={() => void setSearchRootEnabled(root, !root.enabled)} aria-label={root.enabled ? t("disableSearchFolder") : t("enableSearchFolder")}><i /></button>
+                  <button className={segmentButton(false)} onClick={() => void deleteSearchRoot(root)} title={t("deleteSearchFolder")}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              )) : (
+                <div className="rounded-xl border border-dashed border-[var(--line-dark)] px-3 py-4 text-sm text-[var(--muted)]">{t("searchScopeCustomEmpty")}</div>
+              )}
+            </div>
+          )}
+          <span className={quietText}>{t("searchScopeDoesNotChangeLibrary")}</span>
         </div>
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/20 p-3 dark:bg-white/5">
           <div><strong className="block text-sm">{t("launchAtLogin")}</strong><span className={mutedText}>{t("launchAtLoginDesc")}</span></div>

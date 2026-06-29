@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { tauriApi } from "../api/tauriApi";
-import type { DashboardStats, FileQueryResult, LibraryScope } from "../types/domain";
+import type {
+  DashboardStats,
+  FileLibraryFilters,
+  FileQueryResult,
+  LibraryFilter,
+  LibraryScope
+} from "../types/domain";
 import { readableError } from "../utils/viewHelpers";
 import { useAppStore } from "./useAppStore";
 
@@ -48,6 +54,10 @@ function persistLibraryScope(scope: LibraryScope) {
   browserLocalStorage()?.setItem(LIBRARY_SCOPE_STORAGE_KEY, JSON.stringify(scope));
 }
 
+function filtersForLibraryFilter(libraryFilter: LibraryFilter): FileLibraryFilters | undefined {
+  return libraryFilter === "all" ? undefined : { libraryFilter };
+}
+
 export const emptyStats: DashboardStats = {
   totalFiles: 0,
   totalSize: 0,
@@ -74,14 +84,16 @@ export interface FileLibraryStore {
   scope: LibraryScope;
   stats: DashboardStats;
   libraryPage: FileQueryResult;
+  libraryFilter: LibraryFilter;
   selectedFileId: string;
   firstPageRequestId: number;
   setScope: (scope: LibraryScope) => void;
   setCurrentScanScope: (roots: string[], scanSessionId?: string) => void;
+  setLibraryFilter: (libraryFilter: LibraryFilter) => void;
   setLibraryPage: (page: FileQueryResult | ((current: FileQueryResult) => FileQueryResult)) => void;
   setSelectedFileId: (id: string) => void;
   loadStats: (scope?: LibraryScope) => Promise<void>;
-  loadFirstPage: (query?: string, scope?: LibraryScope) => Promise<void>;
+  loadFirstPage: (query?: string, scope?: LibraryScope, libraryFilter?: LibraryFilter) => Promise<void>;
   refresh: (query?: string) => Promise<void>;
 }
 
@@ -89,6 +101,7 @@ export const useFileLibraryStore = create<FileLibraryStore>((set, get) => ({
   scope: readPersistedLibraryScope(),
   stats: emptyStats,
   libraryPage: emptyPage,
+  libraryFilter: "all",
   selectedFileId: "",
   firstPageRequestId: 0,
   setScope: (scope) => {
@@ -104,6 +117,7 @@ export const useFileLibraryStore = create<FileLibraryStore>((set, get) => ({
     persistLibraryScope(scope);
     set({ scope });
   },
+  setLibraryFilter: (libraryFilter) => set({ libraryFilter }),
   setLibraryPage: (page) =>
     set((state) => ({
       libraryPage: typeof page === "function" ? page(state.libraryPage) : page
@@ -117,11 +131,17 @@ export const useFileLibraryStore = create<FileLibraryStore>((set, get) => ({
       useAppStore.getState().showError(readableError(error));
     }
   },
-  loadFirstPage: async (query, scope = get().scope) => {
+  loadFirstPage: async (query, scope = get().scope, libraryFilter = get().libraryFilter) => {
     const requestId = get().firstPageRequestId + 1;
     set({ firstPageRequestId: requestId });
     try {
-      const page = await tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, 0, query || undefined, scope);
+      const page = await tauriApi.getPagedFiles(
+        LIBRARY_PAGE_SIZE,
+        0,
+        query || undefined,
+        scope,
+        filtersForLibraryFilter(libraryFilter)
+      );
       if (requestId !== get().firstPageRequestId) return;
       set((state) => ({
         libraryPage: page,
@@ -140,7 +160,7 @@ export const useFileLibraryStore = create<FileLibraryStore>((set, get) => ({
   },
   refresh: async (query) => {
     const scope = get().scope;
-    await Promise.all([get().loadStats(scope), get().loadFirstPage(query, scope)]);
+    await Promise.all([get().loadStats(scope), get().loadFirstPage(query, scope, get().libraryFilter)]);
   }
 }));
 

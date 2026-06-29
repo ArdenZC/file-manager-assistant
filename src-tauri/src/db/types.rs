@@ -301,6 +301,8 @@ pub enum LibraryFilter {
     Active,
     Archive,
     Review,
+    Duplicate,
+    Sensitive,
 }
 
 pub(crate) struct RuleSqlRow {

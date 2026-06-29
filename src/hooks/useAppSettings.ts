@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { tauriApi } from "../api/tauriApi";
-import type { AppSettings, ScanRootSetting } from "../types/domain";
+import type { AppSettings, LibraryScope, ScanRootSetting, SearchRootSetting } from "../types/domain";
 import { DEFAULT_SEARCH_HOTKEY } from "../utils/hotkeys";
 import { readableError } from "../utils/viewHelpers";
 
@@ -12,7 +12,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   defaultScanFolders: [],
   restoreRetentionDays: 30,
   launchAtLogin: false,
-  searchHotkey: DEFAULT_SEARCH_HOTKEY
+  searchHotkey: DEFAULT_SEARCH_HOTKEY,
+  searchScopeMode: "all",
+  customSearchRoots: []
 };
 
 interface UseAppSettingsOptions {
@@ -36,14 +38,14 @@ export function createScanRootSetting(
   path: string,
   createdAt = new Date().toISOString()
 ): ScanRootSetting {
-  const normalizedPath = normalizeScanRootPath(path);
-  return {
-    id: scanRootId(normalizedPath),
-    path: normalizedPath,
-    label: scanRootLabel(normalizedPath),
-    enabled: true,
-    createdAt
-  };
+  return createRootSetting(path, createdAt);
+}
+
+export function createSearchRootSetting(
+  path: string,
+  createdAt = new Date().toISOString()
+): SearchRootSetting {
+  return createRootSetting(path, createdAt);
 }
 
 export function upsertDefaultScanRoot(
@@ -84,6 +86,74 @@ export function removeDefaultScanRoot(
 }
 
 export function enabledScanRootPaths(roots: ScanRootSetting[]): string[] {
+  return enabledRootPaths(roots);
+}
+
+export function upsertSearchRoot(
+  current: SearchRootSetting[],
+  path: string,
+  createdAt = new Date().toISOString()
+): SearchRootSetting[] {
+  const nextRoot = createSearchRootSetting(path, createdAt);
+  const existingIndex = current.findIndex((root) => sameScanRootPath(root.path, nextRoot.path));
+
+  if (existingIndex === -1) return [...current, nextRoot];
+
+  return current.map((root, index) =>
+    index === existingIndex
+      ? {
+          ...root,
+          path: nextRoot.path,
+          label: root.label || nextRoot.label,
+          enabled: true
+        }
+      : root
+  );
+}
+
+export function toggleSearchRoot(
+  current: SearchRootSetting[],
+  id: string,
+  enabled: boolean
+): SearchRootSetting[] {
+  return current.map((root) => (root.id === id ? { ...root, enabled } : root));
+}
+
+export function removeSearchRoot(
+  current: SearchRootSetting[],
+  id: string
+): SearchRootSetting[] {
+  return current.filter((root) => root.id !== id);
+}
+
+export function enabledSearchRootPaths(roots: SearchRootSetting[]): string[] {
+  return enabledRootPaths(roots);
+}
+
+export function resolveEffectiveSearchScope(
+  settings: Pick<AppSettings, "searchScopeMode" | "customSearchRoots">,
+  currentLibraryScope: LibraryScope
+): LibraryScope {
+  if (settings.searchScopeMode === "all") return { kind: "all" };
+  if (settings.searchScopeMode === "current_scan") return currentLibraryScope;
+  return { kind: "roots", roots: enabledSearchRootPaths(settings.customSearchRoots) };
+}
+
+function createRootSetting<T extends ScanRootSetting | SearchRootSetting>(
+  path: string,
+  createdAt: string
+): T {
+  const normalizedPath = normalizeScanRootPath(path);
+  return {
+    id: scanRootId(normalizedPath),
+    path: normalizedPath,
+    label: scanRootLabel(normalizedPath),
+    enabled: true,
+    createdAt
+  } as T;
+}
+
+function enabledRootPaths(roots: Array<ScanRootSetting | SearchRootSetting>): string[] {
   return roots
     .filter((root) => root.enabled && root.path.trim())
     .map((root) => root.path.trim());

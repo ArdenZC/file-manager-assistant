@@ -52,8 +52,17 @@ export type FolderNamingLanguage = "en" | "zh";
 export type CloseBehavior = "ask" | "minimize" | "quit";
 export type RestoreRetentionDays = 15 | 30 | 60 | 90;
 export type RuleExecutionMode = "inbox_only" | "all_changed_or_rule_changed";
+export type SearchScopeMode = "all" | "current_scan" | "custom_roots";
 
 export interface ScanRootSetting {
+  id: string;
+  path: string;
+  label: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface SearchRootSetting {
   id: string;
   path: string;
   label: string;
@@ -66,7 +75,7 @@ export type LibraryScope =
   | { kind: "roots"; roots: string[] }
   | { kind: "all" };
 
-export type LibraryFilter = "all" | "active" | "archive" | "review";
+export type LibraryFilter = "all" | "active" | "archive" | "review" | "duplicate" | "sensitive";
 
 export interface FileLibraryFilters {
   libraryFilter?: LibraryFilter;
@@ -79,6 +88,8 @@ export interface AppSettings {
   restoreRetentionDays: RestoreRetentionDays;
   launchAtLogin: boolean;
   searchHotkey: string;
+  searchScopeMode: SearchScopeMode;
+  customSearchRoots: SearchRootSetting[];
 }
 
 export interface FileRecord {

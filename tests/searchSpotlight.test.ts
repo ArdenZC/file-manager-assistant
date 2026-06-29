@@ -70,12 +70,15 @@ describe("spotlight search navigation", () => {
     expect(setSelectedFileId).toHaveBeenCalledTimes(1);
   });
 
-  it("uses global searchFiles for command results instead of scoped paged files", () => {
-    const source = readFileSync(resolve("src/components/CommandModal.tsx"), "utf8");
+  it("uses the resolved effective search scope for command and standalone spotlight results", () => {
+    const commandModal = readFileSync(resolve("src/components/CommandModal.tsx"), "utf8");
+    const appShell = readFileSync(resolve("src/components/AppShell.tsx"), "utf8");
 
-    expect(source).toContain("tauriApi.searchFiles(trimmedSearch, 12)");
-    expect(source).not.toContain("tauriApi.searchFiles(trimmedSearch, 12, scope)");
-    expect(source).not.toContain("tauriApi.getPagedFiles(12, 0, trimmedSearch");
+    expect(commandModal).toContain("searchScope");
+    expect(commandModal).toContain("tauriApi.searchFiles(trimmedSearch, 12, searchScope)");
+    expect(commandModal).not.toContain("tauriApi.getPagedFiles(12, 0, trimmedSearch");
+    expect(appShell).toContain("resolveEffectiveSearchScope");
+    expect(appShell).toContain("searchScope={effectiveSearchScope}");
   });
 
   it("configures the global search window as a transparent spotlight surface", () => {

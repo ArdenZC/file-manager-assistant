@@ -374,21 +374,51 @@ impl Database {
         let offset = offset.unwrap_or(0);
         let now = current_timestamp_iso();
         let conn = self.conn()?;
-        let scoped = scoped_files_sql_with_extra_where(Some(scope), library_filter_clause(filter));
+        let scoped =
+            scoped_files_sql_with_extra_where(Some(scope), library_filter_pre_dup_clause(filter));
+        let post_join_filter = library_filter_post_dup_clause(filter);
+        let post_join_where = post_join_where_clause(post_join_filter);
 
         if let Some((raw_query, fts_query)) =
             query.and_then(|value| build_fts_query(value).map(|fts_query| (value, fts_query)))
         {
             let search = search_match_sql(&fts_query, raw_query);
-            let total_sql = format!(
-                r#"
-                WITH {},
-                {}
-                SELECT COUNT(*)
-                FROM best_matches
-                "#,
-                scoped.cte, search.cte
-            );
+            let total_sql = if post_join_filter.is_some() {
+                format!(
+                    r#"
+                    WITH {},
+                    {},
+                    dup_groups AS (
+                        SELECT size, content_hash
+                        FROM scoped_files
+                        WHERE is_dir = 0
+                          AND content_hash <> ''
+                        GROUP BY size, content_hash
+                        HAVING COUNT(*) > 1
+                    )
+                    SELECT COUNT(*)
+                    FROM best_matches AS bm
+                    JOIN scoped_files AS f ON f.rowid = bm.rowid
+                    LEFT JOIN dup_groups AS dg
+                      ON dg.size = f.size
+                     AND dg.content_hash = f.content_hash
+                    {}
+                    "#,
+                    scoped.cte,
+                    search.cte,
+                    post_join_where.as_str()
+                )
+            } else {
+                format!(
+                    r#"
+                    WITH {},
+                    {}
+                    SELECT COUNT(*)
+                    FROM best_matches
+                    "#,
+                    scoped.cte, search.cte
+                )
+            };
             let mut total_params = scoped.params.clone();
             total_params.extend(search.params.clone());
             maybe_print_query_plan(
@@ -450,10 +480,13 @@ impl Database {
                 LEFT JOIN dup_groups AS dg
                   ON dg.size = f.size
                  AND dg.content_hash = f.content_hash
+                {}
                 ORDER BY bm.rank ASC, f.mtime DESC, length(f.path) ASC
                 LIMIT ? OFFSET ?
                 "#,
-                scoped.cte, search.cte
+                scoped.cte,
+                search.cte,
+                post_join_where.as_str()
             );
             let mut page_params = scoped.params.clone();
             page_params.extend(search.params);
@@ -480,7 +513,31 @@ impl Database {
             });
         }
 
-        let total_sql = format!("WITH {} SELECT COUNT(*) FROM scoped_files", scoped.cte);
+        let total_sql = if post_join_filter.is_some() {
+            format!(
+                r#"
+                WITH {},
+                dup_groups AS (
+                    SELECT size, content_hash
+                    FROM scoped_files
+                    WHERE is_dir = 0
+                      AND content_hash <> ''
+                    GROUP BY size, content_hash
+                    HAVING COUNT(*) > 1
+                )
+                SELECT COUNT(*)
+                FROM scoped_files AS f
+                LEFT JOIN dup_groups AS dg
+                  ON dg.size = f.size
+                 AND dg.content_hash = f.content_hash
+                {}
+                "#,
+                scoped.cte,
+                post_join_where.as_str()
+            )
+        } else {
+            format!("WITH {} SELECT COUNT(*) FROM scoped_files", scoped.cte)
+        };
         maybe_print_query_plan(&conn, "get_paged_files.total", &total_sql, &scoped.params)?;
         let total = conn.query_row(&total_sql, params_from_iter(scoped.params.iter()), |row| {
             row.get(0)
@@ -507,10 +564,12 @@ impl Database {
             LEFT JOIN dup_groups AS dg
               ON dg.size = f.size
              AND dg.content_hash = f.content_hash
+            {}
             ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
             LIMIT ? OFFSET ?
             "#,
-            scoped.cte
+            scoped.cte,
+            post_join_where.as_str()
         );
         let mut page_params = scoped.params.clone();
         page_params.push(SqlValue::Integer(i64::from(limit)));
@@ -540,7 +599,12 @@ impl Database {
         filter: Option<&FileLibraryFilter>,
     ) -> Result<Vec<String>, DbError> {
         let conn = self.conn()?;
-        let scoped = scoped_files_sql_with_extra_where(Some(scope), library_filter_clause(filter));
+        let scoped =
+            scoped_files_sql_with_extra_where(Some(scope), library_filter_pre_dup_clause(filter));
+        let post_join_filter = library_filter_post_dup_clause(filter);
+        let post_join_where = post_join_where_clause(post_join_filter);
+        let duplicate_cte = duplicate_filter_cte(post_join_filter);
+        let duplicate_join = duplicate_filter_join(post_join_filter);
         if let Some((raw_query, fts_query)) =
             query.and_then(|value| build_fts_query(value).map(|fts_query| (value, fts_query)))
         {
@@ -549,13 +613,20 @@ impl Database {
                 r#"
                 WITH {},
                 {}
+                {}
                 SELECT f.id
                 FROM best_matches AS bm
                 JOIN scoped_files AS f ON f.rowid = bm.rowid
+                {}
+                {}
                 ORDER BY bm.rank ASC, f.mtime DESC, length(f.path) ASC
                 LIMIT ? OFFSET ?
                 "#,
-                scoped.cte, search.cte
+                scoped.cte,
+                search.cte,
+                duplicate_cte,
+                duplicate_join,
+                post_join_where.as_str()
             );
             let mut params = scoped.params.clone();
             params.extend(search.params);
@@ -569,10 +640,18 @@ impl Database {
             WITH {}
             SELECT f.id
             FROM scoped_files AS f
+            {}
+            {}
             ORDER BY f.mtime DESC, f.name COLLATE NOCASE ASC
             LIMIT ? OFFSET ?
             "#,
-            scoped.cte
+            if post_join_filter.is_some() {
+                format!("{}{}", scoped.cte, duplicate_cte)
+            } else {
+                scoped.cte
+            },
+            duplicate_join,
+            post_join_where.as_str()
         );
         let mut params = scoped.params.clone();
         params.push(SqlValue::Integer(50));
@@ -829,13 +908,13 @@ fn explain_query_plan(
 fn operation_preview_filter_clause(filter: Option<&FileLibraryFilter>) -> String {
     let action_clause =
         "f.is_dir = 0 AND f.suggested_action IN ('Move', 'Rename', 'MoveAndRename', 'Archive')";
-    match library_filter_clause(filter) {
+    match library_filter_pre_dup_clause(filter) {
         Some(library_clause) => format!("{action_clause} AND ({library_clause})"),
         None => action_clause.to_string(),
     }
 }
 
-fn library_filter_clause(filter: Option<&FileLibraryFilter>) -> Option<&'static str> {
+fn library_filter_pre_dup_clause(filter: Option<&FileLibraryFilter>) -> Option<&'static str> {
     match filter.and_then(|filter| filter.library_filter.as_ref()) {
         None | Some(LibraryFilter::All) => None,
         Some(LibraryFilter::Active) => {
@@ -845,7 +924,53 @@ fn library_filter_clause(filter: Option<&FileLibraryFilter>) -> Option<&'static 
         Some(LibraryFilter::Review) => Some(
             "f.requires_confirmation = 1 OR f.suggested_action IN ('Review', 'DeleteCandidate')",
         ),
+        Some(LibraryFilter::Duplicate) => None,
+        Some(LibraryFilter::Sensitive) => {
+            Some("f.risk_level = 'Sensitive' OR f.lifecycle = 'Sensitive'")
+        }
     }
+}
+
+fn library_filter_post_dup_clause(filter: Option<&FileLibraryFilter>) -> Option<&'static str> {
+    match filter.and_then(|filter| filter.library_filter.as_ref()) {
+        Some(LibraryFilter::Duplicate) => Some("dg.content_hash IS NOT NULL"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn duplicate_filter_cte(clause: Option<&str>) -> &'static str {
+    if clause.is_none() {
+        return "";
+    }
+
+    r#",
+            dup_groups AS (
+                SELECT size, content_hash
+                FROM scoped_files
+                WHERE is_dir = 0
+                  AND content_hash <> ''
+                GROUP BY size, content_hash
+                HAVING COUNT(*) > 1
+            )"#
+}
+
+#[cfg(test)]
+fn duplicate_filter_join(clause: Option<&str>) -> &'static str {
+    if clause.is_none() {
+        return "";
+    }
+
+    r#"
+            LEFT JOIN dup_groups AS dg
+              ON dg.size = f.size
+             AND dg.content_hash = f.content_hash"#
+}
+
+fn post_join_where_clause(clause: Option<&str>) -> String {
+    clause
+        .map(|clause| format!("WHERE ({clause})"))
+        .unwrap_or_default()
 }
 
 fn operation_preview_from_indexed(row: IndexedFileRow) -> Option<OperationPreviewDto> {

@@ -14,19 +14,22 @@ import {
   Square,
   X
 } from "lucide-react";
+import { useMemo } from "react";
 import { CommandModal } from "./CommandModal";
 import { ViewErrorBoundary } from "./ErrorBoundary";
 import { AmbientMesh, CloseChoiceDialog, TitlebarTools, ZenMark } from "./ShellChrome";
-import { useChromeContext } from "../contexts/AppContexts";
+import { useChromeContext, useSettingsContext } from "../contexts/AppContexts";
+import { resolveEffectiveSearchScope } from "../hooks/useAppSettings";
 import { hideToBackground } from "../hooks/useWindowBehavior";
 import { useAppStore } from "../store/useAppStore";
 import { useFileLibraryStore } from "../store/useFileLibraryStore";
 import { useOperationQueueStore } from "../store/useOperationQueueStore";
 import { useScanManagerStore } from "../store/useScanManagerStore";
+import type { AppSettings, LibraryScope } from "../types/domain";
 import type { Translator, View } from "../types/ui";
 import { formatDate } from "../utils/format";
 import { cn, glassButton, glassButtonPrimary, statusToast, toastTone } from "../utils/tw";
-import { readableError } from "../utils/viewHelpers";
+import { compactPath, libraryScopeLabel, readableError } from "../utils/viewHelpers";
 import {
   HubView,
   RestoreView,
@@ -130,7 +133,15 @@ function SearchWindow() {
 
 function CommandLauncher({ standalone = false }: { standalone?: boolean }) {
   const { commandInputRef, setView, setIsCommandOpen, platform, onError, t } = useChromeContext();
+  const { settings } = useSettingsContext();
+  const currentLibraryScope = useFileLibraryStore((state) => state.scope);
   const setSelectedFileId = useFileLibraryStore((state) => state.setSelectedFileId);
+  const effectiveSearchScope = useMemo(
+    () => resolveEffectiveSearchScope(settings, currentLibraryScope),
+    [currentLibraryScope, settings]
+  );
+  const searchScopeLabel = commandSearchScopeLabel(settings, currentLibraryScope, t);
+  const searchScopeEmptyMessage = commandSearchScopeEmptyMessage(settings, currentLibraryScope, t);
 
   function closeCommand() {
     setIsCommandOpen(false);
@@ -150,9 +161,38 @@ function CommandLauncher({ standalone = false }: { standalone?: boolean }) {
       platform={platform}
       t={t}
       onError={onError}
+      searchScope={effectiveSearchScope}
+      searchScopeLabel={searchScopeLabel}
+      searchScopeEmptyMessage={searchScopeEmptyMessage}
       standalone={standalone}
     />
   );
+}
+
+function commandSearchScopeLabel(settings: AppSettings, currentLibraryScope: LibraryScope, t: Translator) {
+  if (settings.searchScopeMode === "all") return `${t("searchScopeLabel")}: ${t("searchScopeAllIndexed")}`;
+  if (settings.searchScopeMode === "current_scan") {
+    const currentLabel = libraryScopeLabel(currentLibraryScope, t("searchScopeAllIndexed"), t("noFolderSelected"));
+    return currentLibraryScope.kind === "all"
+      ? `${t("searchScopeLabel")}: ${t("searchScopeAllIndexed")}`
+      : `${t("searchScopeLabel")}: ${t("searchScopeCurrentScan")}${currentLibraryScope.roots.length ? ` · ${currentLabel}` : ""}`;
+  }
+
+  const enabledRoots = settings.customSearchRoots.filter((root) => root.enabled && root.path.trim());
+  if (!enabledRoots.length) return `${t("searchScopeLabel")}: ${t("searchScopeCustomEmpty")}`;
+  const first = compactPath(enabledRoots[0].path, 42);
+  const suffix = enabledRoots.length > 1 ? ` +${enabledRoots.length - 1}` : "";
+  return `${t("searchScopeLabel")}: ${t("searchScopeCustomRoots")}: ${first}${suffix}`;
+}
+
+function commandSearchScopeEmptyMessage(settings: AppSettings, currentLibraryScope: LibraryScope, t: Translator) {
+  if (settings.searchScopeMode === "custom_roots" && !settings.customSearchRoots.some((root) => root.enabled && root.path.trim())) {
+    return t("searchScopeCustomEmpty");
+  }
+  if (settings.searchScopeMode === "current_scan" && currentLibraryScope.kind === "current_scan" && currentLibraryScope.roots.length === 0) {
+    return t("searchScopeCurrentScanEmpty");
+  }
+  return "";
 }
 
 function ChromeTools() {

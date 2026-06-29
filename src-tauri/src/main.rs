@@ -30,6 +30,7 @@ fn main() {
             app.manage(ScanCancellationToken(Arc::new(AtomicBool::new(false))));
             app.manage(OperationCancellationToken(Arc::new(AtomicBool::new(false))));
             app.manage(FileWatcherManager::default());
+            app.manage(zen_canvas_tauri::app_control::GlobalHotkeyStatusState::default());
             zen_canvas_tauri::app_control::setup_tray(app)
                 .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             zen_canvas_tauri::app_control::setup_search_window(app)
@@ -86,6 +87,8 @@ fn main() {
             zen_canvas_tauri::settings::save_settings,
             zen_canvas_tauri::app_control::quit_app,
             zen_canvas_tauri::app_control::activate_search_result,
+            zen_canvas_tauri::app_control::get_global_hotkey_status,
+            zen_canvas_tauri::app_control::register_global_search_hotkey,
             zen_canvas_tauri::scanner::scan_directory,
             zen_canvas_tauri::scanner::cancel_scan,
             zen_canvas_tauri::file_ops::move_file,

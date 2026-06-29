@@ -51,6 +51,16 @@ describe("ui empty and command states", () => {
     expect(hub).toContain('t("viewAllIndexedFiles")');
   });
 
+  it("shows the current library filter next to the library result count", () => {
+    const vault = read("src/views/vault/VaultView.tsx");
+    const t = makeTranslator("zh");
+
+    expect(t("currentLibraryFilter")).toBe("当前筛选");
+    expect(t("libraryFilterReview")).toBe("需要确认");
+    expect(vault).toContain('t("currentLibraryFilter")');
+    expect(vault).toContain("activeFilterLabel");
+  });
+
   it("shows a guided empty preview state with navigation actions", () => {
     const timeline = read("src/views/timeline/TimelineView.tsx");
     const t = makeTranslator("zh");

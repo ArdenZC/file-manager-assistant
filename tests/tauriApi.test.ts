@@ -62,4 +62,14 @@ describe("tauriApi", () => {
       mode: "all_changed_or_rule_changed"
     });
   });
+
+  it("reads and refreshes global hotkey registration status", async () => {
+    await tauriApi.getGlobalHotkeyStatus();
+    await tauriApi.registerGlobalSearchHotkey("Alt+Space");
+
+    expect(apiMocks.invoke).toHaveBeenNthCalledWith(1, "get_global_hotkey_status", undefined);
+    expect(apiMocks.invoke).toHaveBeenNthCalledWith(2, "register_global_search_hotkey", {
+      accelerator: "Alt+Space"
+    });
+  });
 });

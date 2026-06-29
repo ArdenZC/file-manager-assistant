@@ -31,10 +31,11 @@ export function VaultView() {
   const setPage = useFileLibraryStore((state) => state.setLibraryPage);
   const setSelectedFileId = useFileLibraryStore((state) => state.setSelectedFileId);
   const loadStats = useFileLibraryStore((state) => state.loadStats);
+  const libraryFilter = useFileLibraryStore((state) => state.libraryFilter);
+  const setLibraryFilter = useFileLibraryStore((state) => state.setLibraryFilter);
   const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const requestIdRef = useRef(0);
   const hasMore = page.files.length < page.total;
@@ -80,11 +81,14 @@ export function VaultView() {
     { key: "all", label: t("libraryAllFiles"), description: t("libraryAllFilesDesc") },
     { key: "active", label: t("libraryActiveFiles"), description: t("libraryActiveFilesDesc") },
     { key: "archive", label: t("libraryArchiveFiles"), description: t("libraryArchiveFilesDesc") },
-    { key: "review", label: t("libraryReviewFiles"), description: t("libraryReviewFilesDesc") }
+    { key: "review", label: t("libraryReviewFiles"), description: t("libraryReviewFilesDesc") },
+    { key: "duplicate", label: t("libraryDuplicateFiles"), description: t("libraryDuplicateFilesDesc") },
+    { key: "sensitive", label: t("librarySensitiveFiles"), description: t("librarySensitiveFilesDesc") }
   ] satisfies Array<{ key: LibraryFilter; label: string; description: string }>;
   const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
   const scopedSearchPlaceholder = scope.kind === "all" ? t("librarySearchPlaceholder") : t("librarySearchPlaceholderScoped");
   const isEmptyCurrentScanScope = scope.kind === "current_scan" && scope.roots.length === 0;
+  const activeFilterLabel = filters.find((filter) => filter.key === libraryFilter)?.label ?? t("libraryFilterAll");
 
   return (
     <div className={cn(pageSurface, "space-y-4")}>
@@ -158,7 +162,11 @@ export function VaultView() {
         />
       </label>
       <div className="flex items-center justify-between gap-3 text-sm text-[var(--muted)]">
-        <span>{t("libraryShowing").replace("{visible}", String(page.files.length)).replace("{total}", String(page.total))}</span>
+        <span>
+          {t("libraryShowing").replace("{visible}", String(page.files.length)).replace("{total}", String(page.total))}
+          {" · "}
+          {t("currentLibraryFilter")}: <strong className="text-[var(--ink)]">{activeFilterLabel}</strong>
+        </span>
         {isLoading && <em className="not-italic">{t("loading")}</em>}
       </div>
       {error && <div className={cn(statusToast, "mt-0")}>{error}</div>}

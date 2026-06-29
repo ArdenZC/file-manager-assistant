@@ -1,4 +1,29 @@
     #[test]
+    fn app_settings_defaults_include_search_scope_settings() {
+        let settings = AppSettings::default();
+
+        assert_eq!(settings.search_hotkey, "CmdOrCtrl+K");
+        assert_eq!(settings.search_scope_mode, "all");
+        assert!(settings.custom_search_roots.is_empty());
+    }
+
+    #[test]
+    fn app_settings_deserializes_legacy_json_with_search_scope_defaults() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "closeBehavior": "ask",
+            "folderNamingLanguage": "en",
+            "defaultScanFolders": [],
+            "restoreRetentionDays": 30,
+            "launchAtLogin": false
+        }))
+        .expect("legacy settings deserialize");
+
+        assert_eq!(settings.search_hotkey, "CmdOrCtrl+K");
+        assert_eq!(settings.search_scope_mode, "all");
+        assert!(settings.custom_search_roots.is_empty());
+    }
+
+    #[test]
     fn translate_template_uses_chinese_folder_segments() {
         assert_eq!(
             translate_template("20_Areas/Personal/Identity", "zh"),
@@ -307,6 +332,9 @@
             ("file-archive", "archive.txt", "txt"),
             ("file-review", "review.txt", "txt"),
             ("file-delete-candidate", "delete-candidate.txt", "txt"),
+            ("file-duplicate-a", "duplicate-a.txt", "txt"),
+            ("file-duplicate-b", "duplicate-b.txt", "txt"),
+            ("file-sensitive", "passport.pdf", "pdf"),
         ];
         for (index, (id, name, extension)) in samples.into_iter().enumerate() {
             insert_test_file_at_path(
@@ -331,6 +359,24 @@
             "DeleteCandidate",
             false,
         );
+        set_file_review_state(&db, "/tmp/root-a/duplicate-a.txt", "Inbox", "Move", false);
+        set_file_review_state(&db, "/tmp/root-a/duplicate-b.txt", "Inbox", "Move", false);
+        set_file_review_state(&db, "/tmp/root-a/passport.pdf", "Sensitive", "Move", true);
+        let conn = Connection::open(db.path()).expect("open migrated database");
+        conn.execute(
+            r#"
+            UPDATE files
+            SET content_hash = 'same-content'
+            WHERE path IN ('/tmp/root-a/duplicate-a.txt', '/tmp/root-a/duplicate-b.txt')
+            "#,
+            [],
+        )
+        .expect("set duplicate content hash");
+        conn.execute(
+            "UPDATE files SET risk_level = 'Sensitive' WHERE path = '/tmp/root-a/passport.pdf'",
+            [],
+        )
+        .expect("set sensitive risk");
         let scope = LibraryScope::Roots {
             roots: vec!["/tmp/root-a".to_string()],
         };
@@ -368,6 +414,28 @@
                 }),
             )
             .expect("review page");
+        let duplicate = db
+            .get_paged_files_in_scope_with_filter(
+                Some(10),
+                Some(0),
+                None,
+                &scope,
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Duplicate),
+                }),
+            )
+            .expect("duplicate page");
+        let sensitive = db
+            .get_paged_files_in_scope_with_filter(
+                Some(10),
+                Some(0),
+                None,
+                &scope,
+                Some(&FileLibraryFilter {
+                    library_filter: Some(LibraryFilter::Sensitive),
+                }),
+            )
+            .expect("sensitive page");
 
         assert_eq!(active.total, 3);
         assert!(active.files.iter().any(|file| file.id == "file-active"));
@@ -375,12 +443,20 @@
         assert!(active.files.iter().any(|file| file.id == "file-keep"));
         assert_eq!(archive.total, 1);
         assert_eq!(archive.files[0].id, "file-archive");
-        assert_eq!(review.total, 2);
+        assert_eq!(review.total, 3);
         assert!(review.files.iter().any(|file| file.id == "file-review"));
         assert!(review
             .files
             .iter()
             .any(|file| file.id == "file-delete-candidate"));
+        assert!(review.files.iter().any(|file| file.id == "file-sensitive"));
+        assert_eq!(duplicate.total, 2);
+        assert!(duplicate
+            .files
+            .iter()
+            .all(|file| file.id == "file-duplicate-a" || file.id == "file-duplicate-b"));
+        assert_eq!(sensitive.total, 1);
+        assert_eq!(sensitive.files[0].id, "file-sensitive");
     }
 
     #[test]

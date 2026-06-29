@@ -48,10 +48,13 @@ describe("app render architecture", () => {
   it("keeps scanner totals and vault filters tied to their real state", () => {
     const scanner = read("src/views/scanner/ScannerView.tsx");
     const vault = read("src/views/vault/VaultView.tsx");
+    const fileLibraryStore = read("src/store/useFileLibraryStore.ts");
 
     expect(scanner).toContain("const scopedTotalSize = stats.totalSize");
     expect(scanner).not.toContain("files.reduce((sum, file) => sum + file.size");
-    expect(vault).toContain('useState<LibraryFilter>("all")');
+    expect(vault).not.toContain('useState<LibraryFilter>("all")');
+    expect(fileLibraryStore).toContain("libraryFilter: LibraryFilter");
+    expect(fileLibraryStore).toContain("setLibraryFilter");
     expect(vault).toContain("tauriApi.getPagedFiles(LIBRARY_PAGE_SIZE, offset, debouncedSearchQuery, scope, filters)");
     expect(vault).not.toContain("setSearchQuery(filter.key)");
   });

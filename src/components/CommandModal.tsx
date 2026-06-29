@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { ChevronRight, File, Search, X } from "lucide-react";
 import { tauriApi } from "../api/tauriApi";
-import type { FileRecord } from "../types/domain";
+import type { FileRecord, LibraryScope } from "../types/domain";
 import type { Translator, View } from "../types/ui";
 import { cn, emptyState, toneClasses } from "../utils/tw";
 import { readableError } from "../utils/viewHelpers";
@@ -41,6 +41,9 @@ export function CommandModal({
   platform,
   t,
   onError,
+  searchScope,
+  searchScopeLabel,
+  searchScopeEmptyMessage,
   standalone = false
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -50,6 +53,9 @@ export function CommandModal({
   platform: NodeJS.Platform | "browser";
   t: Translator;
   onError?: (message: string) => void;
+  searchScope?: LibraryScope;
+  searchScopeLabel?: string;
+  searchScopeEmptyMessage?: string;
   standalone?: boolean;
 }) {
   const [search, setSearch] = useState("");
@@ -72,10 +78,16 @@ export function CommandModal({
     }
 
     let cancelled = false;
-    setQueryState("pending");
     setCommandError("");
+    if (searchScopeEmptyMessage) {
+      setResults([]);
+      setQueryState("done");
+      setActiveIndex(0);
+      return;
+    }
+    setQueryState("pending");
     const timer = window.setTimeout(() => {
-      tauriApi.searchFiles(trimmedSearch, 12)
+      tauriApi.searchFiles(trimmedSearch, 12, searchScope)
         .then((files) => {
           if (cancelled) return;
           setResults(files);
@@ -94,7 +106,7 @@ export function CommandModal({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [t, trimmedSearch]);
+  }, [searchScope, searchScopeEmptyMessage, t, trimmedSearch]);
 
   const visibleResults = useMemo(() => results.slice(0, 12), [results]);
 
@@ -219,6 +231,11 @@ export function CommandModal({
           )}
           <kbd className="rounded-md border border-[var(--line-dark)] px-2 py-1 text-[11px] text-[var(--quiet)]">ESC</kbd>
         </div>
+        {searchScopeLabel && (
+          <div className="border-t border-[var(--line-dark)] px-5 py-2 text-xs text-[var(--muted)]">
+            {searchScopeLabel}
+          </div>
+        )}
         {showResults && (
           <div className="grid gap-0">
             <div className="px-3 py-3">
@@ -282,7 +299,7 @@ export function CommandModal({
         )}
         {trimmedSearch && queryState === "done" && !results.length && (
           <div className="px-4 pb-4">
-            <div className={cn(emptyState, "min-h-20")}>{t("commandNoResults")}</div>
+            <div className={cn(emptyState, "min-h-20")}>{searchScopeEmptyMessage || t("commandNoResults")}</div>
           </div>
         )}
       </div>

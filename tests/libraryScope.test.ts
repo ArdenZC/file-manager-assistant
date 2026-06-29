@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DashboardStats, FileQueryResult, LibraryScope } from "../src/types/domain";
+import type { DashboardStats, FileQueryResult, LibraryFilter, LibraryScope } from "../src/types/domain";
 import {
   LIBRARY_PAGE_SIZE,
   LIBRARY_SCOPE_STORAGE_KEY,
@@ -78,6 +78,7 @@ describe("library scope store", () => {
       libraryPage: emptyPage,
       selectedFileId: "",
       firstPageRequestId: 0,
+      libraryFilter: "all" as LibraryFilter,
       scope: { kind: "current_scan", roots: [] }
     });
     useScanManagerStore.setState({
@@ -103,7 +104,20 @@ describe("library scope store", () => {
     await useFileLibraryStore.getState().refresh("pdf");
 
     expect(apiMocks.getStatsSummary).toHaveBeenCalledWith(scope);
-    expect(apiMocks.getPagedFiles).toHaveBeenCalledWith(LIBRARY_PAGE_SIZE, 0, "pdf", scope);
+    expect(apiMocks.getPagedFiles).toHaveBeenCalledWith(LIBRARY_PAGE_SIZE, 0, "pdf", scope, undefined);
+  });
+
+  it("refresh carries the active library filter to paged files", async () => {
+    const scope: LibraryScope = { kind: "roots", roots: ["F:/Projects"] };
+    useFileLibraryStore.getState().setScope(scope);
+    useFileLibraryStore.getState().setLibraryFilter("review");
+
+    await useFileLibraryStore.getState().refresh("pdf");
+
+    expect(apiMocks.getStatsSummary).toHaveBeenCalledWith(scope);
+    expect(apiMocks.getPagedFiles).toHaveBeenCalledWith(LIBRARY_PAGE_SIZE, 0, "pdf", scope, {
+      libraryFilter: "review"
+    });
   });
 
   it("switches to all indexed files explicitly", () => {

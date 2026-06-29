@@ -7,6 +7,8 @@ import type {
   FolderNamingLanguage,
   RestoreRetentionDays,
   ScanRootSetting,
+  SearchRootSetting,
+  SearchScopeMode,
   Rule
 } from "../types/domain";
 import type { ThemeMode, Translator, View } from "../types/ui";
@@ -24,6 +26,8 @@ export interface SettingsContextValue extends AppSettingsContextState {
   setRestoreRetentionDays: (next: RestoreRetentionDays) => Promise<boolean>;
   setLaunchAtLogin: (next: boolean) => Promise<boolean>;
   setSearchHotkey: (next: string) => Promise<boolean>;
+  setSearchScopeMode: (next: SearchScopeMode) => Promise<boolean>;
+  setCustomSearchRoots: (next: SearchRootSetting[]) => Promise<boolean>;
 }
 
 export interface RulesContextValue {

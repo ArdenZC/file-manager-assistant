@@ -60,6 +60,12 @@ export interface GlobalHotkeyErrorPayload {
   message: string;
 }
 
+export interface GlobalHotkeyStatus {
+  accelerator: string;
+  registered: boolean;
+  error: string | null;
+}
+
 export interface RuleExecutionSummary {
   scanned: number;
   updated: number;
@@ -192,6 +198,14 @@ export const tauriApi = {
 
   saveSettings(settings: AppSettings): Promise<AppSettings> {
     return invokeCommand<AppSettings>("save_settings", { settings });
+  },
+
+  getGlobalHotkeyStatus(): Promise<GlobalHotkeyStatus | null> {
+    return invokeCommand<GlobalHotkeyStatus | null>("get_global_hotkey_status");
+  },
+
+  registerGlobalSearchHotkey(accelerator: string): Promise<GlobalHotkeyStatus> {
+    return invokeCommand<GlobalHotkeyStatus>("register_global_search_hotkey", { accelerator });
   },
 
   quitApp(): Promise<void> {

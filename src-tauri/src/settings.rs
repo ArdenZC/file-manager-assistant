@@ -24,6 +24,16 @@ pub struct ScanRootSetting {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchRootSetting {
+    pub id: String,
+    pub path: String,
+    pub label: String,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -38,6 +48,13 @@ pub struct AppSettings {
     pub launch_at_login: bool,
     #[serde(default = "default_search_hotkey")]
     pub search_hotkey: String,
+    #[serde(default = "default_search_scope_mode")]
+    pub search_scope_mode: String,
+    #[serde(
+        default = "default_search_roots",
+        deserialize_with = "deserialize_search_roots"
+    )]
+    pub custom_search_roots: Vec<SearchRootSetting>,
 }
 
 impl Default for AppSettings {
@@ -49,6 +66,8 @@ impl Default for AppSettings {
             restore_retention_days: 30,
             launch_at_login: false,
             search_hotkey: DEFAULT_SEARCH_HOTKEY.to_string(),
+            search_scope_mode: default_search_scope_mode(),
+            custom_search_roots: default_search_roots(),
         }
     }
 }
@@ -96,12 +115,28 @@ where
     Ok(scan_roots_from_values(values, dirs::home_dir().as_deref()))
 }
 
+fn deserialize_search_roots<'de, D>(deserializer: D) -> Result<Vec<SearchRootSetting>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<Value>::deserialize(deserializer)?;
+    Ok(search_roots_from_values(values))
+}
+
 fn default_scan_roots() -> Vec<ScanRootSetting> {
     default_scan_roots_for_home(dirs::home_dir().as_deref())
 }
 
+fn default_search_roots() -> Vec<SearchRootSetting> {
+    Vec::new()
+}
+
 fn default_search_hotkey() -> String {
     DEFAULT_SEARCH_HOTKEY.to_string()
+}
+
+fn default_search_scope_mode() -> String {
+    "all".to_string()
 }
 
 fn default_scan_roots_for_home(home: Option<&Path>) -> Vec<ScanRootSetting> {
@@ -170,6 +205,60 @@ fn scan_roots_from_values(values: Vec<Value>, home: Option<&Path>) -> Vec<ScanRo
     roots
 }
 
+fn search_roots_from_values(values: Vec<Value>) -> Vec<SearchRootSetting> {
+    let mut roots = Vec::new();
+
+    for value in values {
+        let Value::Object(object) = value else {
+            continue;
+        };
+        let path = object
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let label = object
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|| scan_root_label(&path));
+        let id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|| scan_root_id(&path));
+        let enabled = object
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let created_at = object
+            .get("createdAt")
+            .or_else(|| object.get("created_at"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(DEFAULT_SCAN_ROOT_CREATED_AT)
+            .to_string();
+        push_unique_search_root(
+            &mut roots,
+            SearchRootSetting {
+                id,
+                path: normalize_scan_root_path(&path),
+                label,
+                enabled,
+                created_at,
+            },
+        );
+    }
+
+    roots
+}
+
 fn normalized_app_settings(settings: &AppSettings) -> AppSettings {
     let values = settings
         .default_scan_folders
@@ -180,8 +269,22 @@ fn normalized_app_settings(settings: &AppSettings) -> AppSettings {
         .unwrap_or_default();
     let mut next = settings.clone();
     next.default_scan_folders = scan_roots_from_values(values, dirs::home_dir().as_deref());
+    let search_values = settings
+        .custom_search_roots
+        .iter()
+        .cloned()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default();
+    next.custom_search_roots = search_roots_from_values(search_values);
     if next.search_hotkey.trim().is_empty() {
         next.search_hotkey = default_search_hotkey();
+    }
+    if !matches!(
+        next.search_scope_mode.as_str(),
+        "all" | "current_scan" | "custom_roots"
+    ) {
+        next.search_scope_mode = default_search_scope_mode();
     }
     next
 }
@@ -210,6 +313,17 @@ fn legacy_scan_root(folder: &str, home: Option<&Path>, enabled: bool) -> ScanRoo
 }
 
 fn push_unique_scan_root(roots: &mut Vec<ScanRootSetting>, root: ScanRootSetting) {
+    let normalized_path = root.path.to_lowercase();
+    if roots
+        .iter()
+        .any(|existing| existing.path.to_lowercase() == normalized_path)
+    {
+        return;
+    }
+    roots.push(root);
+}
+
+fn push_unique_search_root(roots: &mut Vec<SearchRootSetting>, root: SearchRootSetting) {
     let normalized_path = root.path.to_lowercase();
     if roots
         .iter()

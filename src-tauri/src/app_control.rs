@@ -1,5 +1,6 @@
 use serde::Serialize;
-use tauri::{AppHandle, Runtime};
+use std::sync::Mutex;
+use tauri::{AppHandle, Runtime, State};
 
 use crate::settings::DEFAULT_SEARCH_HOTKEY;
 
@@ -46,9 +47,34 @@ pub struct GlobalHotkeyErrorPayload {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalHotkeyStatus {
+    pub accelerator: String,
+    pub registered: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct GlobalHotkeyStatusState {
+    status: Mutex<Option<GlobalHotkeyStatus>>,
+}
+
 impl SearchNavigatePayload {
     pub fn new(view: String, file_id: Option<String>) -> Self {
         Self { view, file_id }
+    }
+}
+
+impl GlobalHotkeyStatusState {
+    pub fn set(&self, status: GlobalHotkeyStatus) {
+        if let Ok(mut guard) = self.status.lock() {
+            *guard = Some(status);
+        }
+    }
+
+    pub fn get(&self) -> Option<GlobalHotkeyStatus> {
+        self.status.lock().ok().and_then(|guard| guard.clone())
     }
 }
 
@@ -82,6 +108,22 @@ pub fn activate_search_result<R: Runtime>(
 ) -> Result<(), String> {
     let payload = SearchNavigatePayload::new(view, file_id);
     activate_search_result_payload(&app, payload).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_global_hotkey_status(
+    status_state: State<'_, GlobalHotkeyStatusState>,
+) -> Option<GlobalHotkeyStatus> {
+    status_state.get()
+}
+
+#[tauri::command]
+pub fn register_global_search_hotkey<R: Runtime>(
+    app: AppHandle<R>,
+    status_state: State<'_, GlobalHotkeyStatusState>,
+    accelerator: String,
+) -> GlobalHotkeyStatus {
+    register_global_search_shortcut(&app, &status_state, &accelerator)
 }
 
 #[cfg(feature = "desktop-runtime")]
@@ -129,14 +171,11 @@ pub fn setup_search_window(app: &mut App) -> tauri::Result<()> {
 
 #[cfg(feature = "desktop-runtime")]
 pub fn setup_global_search_shortcut(app: &mut App, accelerator: &str) -> Result<(), String> {
-    let shortcut = global_search_shortcut(accelerator)?;
-    let shortcut_for_handler = shortcut.clone();
     app.handle()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, shortcut, event| {
-                    if shortcut == &shortcut_for_handler && event.state() == ShortcutState::Pressed
-                    {
+                .with_handler(move |app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
                         if let Err(error) = toggle_search_window(app) {
                             eprintln!("Toggle search window from global shortcut failed: {error}");
                         }
@@ -145,16 +184,87 @@ pub fn setup_global_search_shortcut(app: &mut App, accelerator: &str) -> Result<
                 .build(),
         )
         .map_err(|error| error.to_string())?;
-    if let Err(error) = app.global_shortcut().register(shortcut) {
-        let message = format!(
-            "Global search hotkey registration failed for {}: {error}",
-            global_search_accelerator(accelerator)
-        );
-        eprintln!("{message}");
-        emit_global_hotkey_error(app.handle(), message.clone());
-        return Err(message);
+    let status_state = app.state::<GlobalHotkeyStatusState>();
+    let status = register_global_search_shortcut(app.handle(), &status_state, accelerator);
+    if status.registered {
+        Ok(())
+    } else {
+        Err(status
+            .error
+            .unwrap_or_else(|| "Global search hotkey registration failed".to_string()))
     }
-    Ok(())
+}
+
+#[cfg(feature = "desktop-runtime")]
+fn register_global_search_shortcut<R: Runtime>(
+    app: &AppHandle<R>,
+    status_state: &GlobalHotkeyStatusState,
+    accelerator: &str,
+) -> GlobalHotkeyStatus {
+    let accelerator = global_search_accelerator(accelerator).to_string();
+    let shortcut = match global_search_shortcut(&accelerator) {
+        Ok(shortcut) => shortcut,
+        Err(error) => {
+            let message = format!("Global search hotkey registration failed for {accelerator}: {error}");
+            eprintln!("{message}");
+            emit_global_hotkey_error(app, message.clone());
+            let status = GlobalHotkeyStatus {
+                accelerator,
+                registered: false,
+                error: Some(message),
+            };
+            status_state.set(status.clone());
+            return status;
+        }
+    };
+
+    if let Err(error) = app.global_shortcut().unregister_all() {
+        let message = format!("Global search hotkey reset failed for {accelerator}: {error}");
+        eprintln!("{message}");
+        emit_global_hotkey_error(app, message.clone());
+        let status = GlobalHotkeyStatus {
+            accelerator,
+            registered: false,
+            error: Some(message),
+        };
+        status_state.set(status.clone());
+        return status;
+    }
+
+    let status = match app.global_shortcut().register(shortcut) {
+        Ok(()) => GlobalHotkeyStatus {
+            accelerator,
+            registered: true,
+            error: None,
+        },
+        Err(error) => {
+            let message = format!("Global search hotkey registration failed for {accelerator}: {error}");
+            eprintln!("{message}");
+            emit_global_hotkey_error(app, message.clone());
+            GlobalHotkeyStatus {
+                accelerator,
+                registered: false,
+                error: Some(message),
+            }
+        }
+    };
+    status_state.set(status.clone());
+    status
+}
+
+#[cfg(not(feature = "desktop-runtime"))]
+fn register_global_search_shortcut<R: Runtime>(
+    _app: &AppHandle<R>,
+    status_state: &GlobalHotkeyStatusState,
+    accelerator: &str,
+) -> GlobalHotkeyStatus {
+    let status = GlobalHotkeyStatus {
+        accelerator: global_search_accelerator(accelerator).to_string(),
+        registered: false,
+        error: Some("Global hotkeys require the desktop runtime.".to_string()),
+    };
+    status_state.set(status.clone());
+    status
 }
 
 #[cfg(feature = "desktop-runtime")]

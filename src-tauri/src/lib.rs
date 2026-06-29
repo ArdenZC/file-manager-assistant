@@ -11,7 +11,10 @@ use db::Database;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
-pub use app_control::{activate_search_result, quit_app, SearchNavigatePayload};
+pub use app_control::{
+    activate_search_result, get_global_hotkey_status, quit_app, register_global_search_hotkey,
+    GlobalHotkeyStatus, GlobalHotkeyStatusState, SearchNavigatePayload,
+};
 pub use db::{
     delete_user_rule, execute_rules_for_paths, execute_rules_for_scope, execute_rules_on_inbox,
     get_operation_logs, get_operation_previews_for_scope, get_paged_files, get_stats_summary,
