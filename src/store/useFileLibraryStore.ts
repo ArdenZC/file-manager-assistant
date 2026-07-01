@@ -4,6 +4,7 @@ import type {
   DashboardStats,
   FileLibraryFilters,
   FileQueryResult,
+  FileRecord,
   LibraryFilter,
   LibraryScope
 } from "../types/domain";
@@ -11,6 +12,8 @@ import { readableError } from "../utils/viewHelpers";
 import { useAppStore } from "./useAppStore";
 
 export const LIBRARY_PAGE_SIZE = 50;
+export const ORGANIZE_QUEUE_PAGE_SIZE = 500;
+export const ORGANIZE_QUEUE_MAX_FILES = 3000;
 export const LIBRARY_SCOPE_STORAGE_KEY = "zc-library-scope";
 export const defaultLibraryScope: LibraryScope = { kind: "current_scan", roots: [] };
 
@@ -84,6 +87,10 @@ export interface FileLibraryStore {
   scope: LibraryScope;
   stats: DashboardStats;
   libraryPage: FileQueryResult;
+  organizeQueue: FileRecord[];
+  organizeQueueTotal: number;
+  organizeQueueTruncated: boolean;
+  isLoadingOrganizeQueue: boolean;
   libraryFilter: LibraryFilter;
   selectedFileId: string;
   firstPageRequestId: number;
@@ -94,6 +101,7 @@ export interface FileLibraryStore {
   setSelectedFileId: (id: string) => void;
   loadStats: (scope?: LibraryScope) => Promise<void>;
   loadFirstPage: (query?: string, scope?: LibraryScope, libraryFilter?: LibraryFilter) => Promise<void>;
+  loadOrganizeQueue: (scope?: LibraryScope) => Promise<void>;
   refresh: (query?: string) => Promise<void>;
 }
 
@@ -101,6 +109,10 @@ export const useFileLibraryStore = create<FileLibraryStore>((set, get) => ({
   scope: readPersistedLibraryScope(),
   stats: emptyStats,
   libraryPage: emptyPage,
+  organizeQueue: [],
+  organizeQueueTotal: 0,
+  organizeQueueTruncated: false,
+  isLoadingOrganizeQueue: false,
   libraryFilter: "all",
   selectedFileId: "",
   firstPageRequestId: 0,
@@ -154,6 +166,38 @@ export const useFileLibraryStore = create<FileLibraryStore>((set, get) => ({
       set({
         libraryPage: emptyPage,
         selectedFileId: ""
+      });
+      useAppStore.getState().showError(readableError(error));
+    }
+  },
+  loadOrganizeQueue: async (scope = get().scope) => {
+    set({ isLoadingOrganizeQueue: true });
+    try {
+      const files: FileRecord[] = [];
+      let total = 0;
+      let offset = 0;
+
+      while (files.length < ORGANIZE_QUEUE_MAX_FILES) {
+        const page = await tauriApi.getPagedFiles(ORGANIZE_QUEUE_PAGE_SIZE, offset, undefined, scope);
+        total = page.total;
+        files.push(...page.files.slice(0, ORGANIZE_QUEUE_MAX_FILES - files.length));
+
+        if (!page.files.length || files.length >= total) break;
+        offset += ORGANIZE_QUEUE_PAGE_SIZE;
+      }
+
+      set({
+        organizeQueue: files,
+        organizeQueueTotal: total,
+        organizeQueueTruncated: total > ORGANIZE_QUEUE_MAX_FILES,
+        isLoadingOrganizeQueue: false
+      });
+    } catch (error) {
+      set({
+        organizeQueue: [],
+        organizeQueueTotal: 0,
+        organizeQueueTruncated: false,
+        isLoadingOrganizeQueue: false
       });
       useAppStore.getState().showError(readableError(error));
     }

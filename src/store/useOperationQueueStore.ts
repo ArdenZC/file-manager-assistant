@@ -27,6 +27,7 @@ export interface OperationQueueStore {
   isOperationCanceling: boolean;
   activeOperationKind: OperationProgressPayload["kind"] | null;
   listenersRegistered: boolean;
+  registrationPromise: Promise<void> | null;
   unlistener?: UnlistenFn;
   initializeOperationQueue: () => Promise<void>;
   loadPersistedOperationLogs: () => Promise<void>;
@@ -92,20 +93,27 @@ export const useOperationQueueStore = create<OperationQueueStore>((set, get) => 
   isOperationCanceling: false,
   activeOperationKind: null,
   listenersRegistered: false,
-  initializeOperationQueue: async () => {
-    if (get().listenersRegistered) return;
-    set({ listenersRegistered: true });
-    await get().loadPersistedOperationLogs();
+  registrationPromise: null,
+  initializeOperationQueue: () => {
+    if (get().listenersRegistered) return Promise.resolve();
+    const registrationPromise = get().registrationPromise;
+    if (registrationPromise) return registrationPromise;
 
-    try {
-      const unlistener = await tauriApi.onOperationProgress((payload) => {
-        if (get().activeOperationKind !== payload.kind) return;
-        set({ operationProgress: payload });
-      });
-      set({ unlistener });
-    } catch (error) {
-      useAppStore.getState().showError(readableError(error));
-    }
+    const promise = (async () => {
+      try {
+        await get().loadPersistedOperationLogs();
+        const unlistener = await tauriApi.onOperationProgress((payload) => {
+          if (get().activeOperationKind !== payload.kind) return;
+          set({ operationProgress: payload });
+        });
+        set({ listenersRegistered: true, registrationPromise: null, unlistener });
+      } catch (error) {
+        set({ registrationPromise: null });
+        useAppStore.getState().showError(readableError(error));
+      }
+    })();
+    set({ registrationPromise: promise });
+    return promise;
   },
   loadPersistedOperationLogs: async () => {
     try {

@@ -10,11 +10,12 @@ import {
 } from "../api/tauriApi";
 import { enabledScanRootPaths } from "../hooks/useAppSettings";
 import { makeTranslator } from "../i18n";
-import type { ScanStatus } from "../hooks/useScanProgress";
 import type { ScanRootSetting } from "../types/domain";
 import { readableError } from "../utils/viewHelpers";
 import { useAppStore } from "./useAppStore";
 import { useFileLibraryStore } from "./useFileLibraryStore";
+
+export type ScanStatus = "idle" | "scanning" | "completed" | "error";
 
 export interface ScanStateData {
   status: ScanStatus;
@@ -36,6 +37,7 @@ export interface ScanManagerStore {
   isScanning: boolean;
   scanState: ScanStateData;
   listenersRegistered: boolean;
+  registrationPromise: Promise<void> | null;
   unlisteners: UnlistenFn[];
   initializeScanListeners: () => Promise<void>;
   setDefaultScanRoots: (roots: ScanRootSetting[]) => void;
@@ -70,80 +72,85 @@ export const useScanManagerStore = create<ScanManagerStore>((set, get) => ({
   isScanning: false,
   scanState: initialScanState,
   listenersRegistered: false,
+  registrationPromise: null,
   unlisteners: [],
-  initializeScanListeners: async () => {
-    if (get().listenersRegistered) return;
-    set({ listenersRegistered: true });
+  initializeScanListeners: () => {
+    if (get().listenersRegistered) return Promise.resolve();
+    const registrationPromise = get().registrationPromise;
+    if (registrationPromise) return registrationPromise;
 
-    try {
-      const unlisteners = await Promise.all([
-        tauriApi.onScanProgress((progress) => {
-          set((state) => ({
-            scanState: {
-              ...state.scanState,
-              status: "scanning",
-              progress,
-              error: null
-            }
-          }));
-        }),
-        tauriApi.onScanBatch((batch: ScanBatchPayload) => {
-          set((state) => ({
-            scanState: {
-              ...state.scanState,
-              status: "scanning",
-              progress: batch.progress,
-              error: null
-            }
-          }));
-        }),
-        tauriApi.onScanComplete((summary: ScanSummary) => {
-          useFileLibraryStore.getState().setCurrentScanScope([summary.root]);
-          set((state) => ({
-            scanState: {
-              ...state.scanState,
-              status: "completed",
-              progress: summary,
-              error: null
-            }
-          }));
-          void useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery);
-        }),
-        tauriApi.onScanError((payload) => {
-          set((state) => ({
-            scanState: {
-              ...state.scanState,
-              status: state.scanState.status === "idle" ? "scanning" : state.scanState.status,
-              progress: state.scanState.progress
-                ? {
-                    ...state.scanState.progress,
-                    errors: state.scanState.progress.errors + 1
-                  }
-                : {
-                    root: payload.root,
-                    scanned: 0,
-                    files: 0,
-                    directories: 0,
-                    skipped: 0,
-                    errors: 1,
-                    elapsedMs: 0
-                  },
-              error: null
-            }
-          }));
-        })
-      ]);
-      set({ unlisteners });
-    } catch (error) {
-      set((state) => ({
-        scanState: {
-          ...state.scanState,
-          status: "error",
-          error: readableError(error)
-        }
-      }));
-      useAppStore.getState().showError(readableError(error));
-    }
+    const promise = (async () => {
+      try {
+        const unlisteners = await Promise.all([
+          tauriApi.onScanProgress((progress) => {
+            set((state) => ({
+              scanState: {
+                ...state.scanState,
+                status: "scanning",
+                progress,
+                error: null
+              }
+            }));
+          }),
+          tauriApi.onScanBatch((batch: ScanBatchPayload) => {
+            set((state) => ({
+              scanState: {
+                ...state.scanState,
+                status: "scanning",
+                progress: batch.progress,
+                error: null
+              }
+            }));
+          }),
+          tauriApi.onScanComplete((summary: ScanSummary) => {
+            set((state) => ({
+              scanState: {
+                ...state.scanState,
+                status: "completed",
+                progress: summary,
+                error: null
+              }
+            }));
+          }),
+          tauriApi.onScanError((payload) => {
+            set((state) => ({
+              scanState: {
+                ...state.scanState,
+                status: state.scanState.status === "idle" ? "scanning" : state.scanState.status,
+                progress: state.scanState.progress
+                  ? {
+                      ...state.scanState.progress,
+                      errors: state.scanState.progress.errors + 1
+                    }
+                  : {
+                      root: payload.root,
+                      scanned: 0,
+                      files: 0,
+                      directories: 0,
+                      skipped: 0,
+                      errors: 1,
+                      elapsedMs: 0
+                    },
+                error: null
+              }
+            }));
+          })
+        ]);
+        set({ listenersRegistered: true, registrationPromise: null, unlisteners });
+      } catch (error) {
+        set((state) => ({
+          registrationPromise: null,
+          scanState: {
+            ...state.scanState,
+            status: "error",
+            error: readableError(error)
+          }
+        }));
+        useAppStore.getState().showError(readableError(error));
+      }
+    })();
+    set({ registrationPromise: promise });
+    return promise;
   },
   setDefaultScanRoots: (roots) => set({ defaultScanRoots: roots }),
   reset: () => set({ scanState: initialScanState }),

@@ -11,7 +11,7 @@ import { useScanManagerStore } from "../../store/useScanManagerStore";
 import type { FileRecord, LibraryFilter } from "../../types/domain";
 import type { Translator } from "../../types/ui";
 import { libraryScopeLabel } from "../../utils/viewHelpers";
-import { shouldVirtualizeList } from "../../utils/virtualization";
+import { shouldTriggerLoadMore, shouldVirtualizeList } from "../../utils/virtualization";
 import { cn, emptyState, glassButton, glassButtonPrimary, inputSurface, statusToast, virtualList, virtualSpacer } from "../../utils/tw";
 import { listMotion, mutedText, pageSurface, segmentButton } from "../shared/ui";
 import { AssetCard } from "./AssetCard";
@@ -65,17 +65,21 @@ export function VaultView() {
     void loadPage(0, false);
   }, [loadPage]);
 
+  const loadMore = useCallback(() => {
+    void loadPage(page.files.length, true);
+  }, [loadPage, page.files.length]);
+
   useEffect(() => {
     const node = sentinelRef.current;
     if (!node || !hasMore || isLoading) return;
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
-        void loadPage(page.files.length, true);
+        loadMore();
       }
     }, { rootMargin: "320px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasMore, isLoading, loadPage, page.files.length]);
+  }, [hasMore, isLoading, loadMore]);
 
   const filters = [
     { key: "all", label: t("libraryAllFiles"), description: t("libraryAllFilesDesc") },
@@ -161,6 +165,9 @@ export function VaultView() {
       {error && <div className={cn(statusToast, "mt-0")}>{error}</div>}
       <VirtualAssetGrid
         files={page.files}
+        hasMore={hasMore}
+        isLoading={isLoading}
+        onLoadMore={loadMore}
         onError={onError}
         selectedFileId={selectedFile?.id}
         setSelectedFileId={setSelectedFileId}
@@ -168,7 +175,7 @@ export function VaultView() {
       />
       <div ref={sentinelRef} className="h-1" />
       {hasMore && (
-        <button className={cn(glassButton, "mx-auto flex")} onClick={() => void loadPage(page.files.length, true)} disabled={isLoading}>
+        <button className={cn(glassButton, "mx-auto flex")} onClick={loadMore} disabled={isLoading}>
           <Plus size={16} />
           {t("loadMoreFiles").replace("{count}", String(Math.min(page.limit, page.total - page.files.length)))}
         </button>
@@ -181,12 +188,18 @@ export function VaultView() {
 
 function VirtualAssetGrid({
   files,
+  hasMore,
+  isLoading,
+  onLoadMore,
   onError,
   selectedFileId,
   setSelectedFileId,
   t
 }: {
   files: FileRecord[];
+  hasMore: boolean;
+  isLoading: boolean;
+  onLoadMore: () => void;
   onError: (message: string) => void;
   selectedFileId?: string;
   setSelectedFileId: (id: string) => void;
@@ -202,6 +215,7 @@ function VirtualAssetGrid({
     estimateSize: () => ASSET_GRID_ROW_HEIGHT,
     overscan: 4
   });
+  const lastVisibleRowIndex = rowVirtualizer.getVirtualItems().at(-1)?.index ?? -1;
 
   useEffect(() => {
     const node = parentRef.current;
@@ -214,6 +228,12 @@ function VirtualAssetGrid({
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (shouldTriggerLoadMore(lastVisibleRowIndex, rowCount, hasMore, isLoading)) {
+      onLoadMore();
+    }
+  }, [hasMore, isLoading, lastVisibleRowIndex, onLoadMore, rowCount]);
 
   if (!shouldVirtualize) {
     return (

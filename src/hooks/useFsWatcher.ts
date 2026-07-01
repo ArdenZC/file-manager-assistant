@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { tauriApi } from "../api/tauriApi";
 import type { Rule } from "../types/domain";
@@ -27,6 +27,12 @@ export function useFsWatcher({
   rules = EMPTY_RULES,
   enabled = true
 }: FsWatcherOptions) {
+  const rulesRef = useRef(rules);
+
+  useEffect(() => {
+    rulesRef.current = rules;
+  }, [rules]);
+
   useEffect(() => {
     if (!enabled) return;
 
@@ -67,7 +73,7 @@ export function useFsWatcher({
             try {
               const summary = await tauriApi.executeRulesForPaths(
                 snapshot.upsert.slice(0, WATCHER_CLASSIFY_LIMIT),
-                rules
+                rulesRef.current
               );
               changed = summary.updated > 0 || changed;
             } catch (error) {
@@ -126,5 +132,5 @@ export function useFsWatcher({
       }
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [enabled, onError, onRefreshData, rules]);
+  }, [enabled, onError, onRefreshData]);
 }

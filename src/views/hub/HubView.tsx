@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { motion } from "motion/react";
 import { Check, File, FolderOpen, FolderSearch, Layers } from "lucide-react";
@@ -50,7 +50,10 @@ export function groupFilesByHubBucket(files: readonly FileRecord[]): HubBucketGr
 
 export function HubView() {
   const { t, setView, onError } = useChromeContext();
-  const files = useFileLibraryStore((state) => state.libraryPage.files);
+  const files = useFileLibraryStore((state) => state.organizeQueue);
+  const organizeQueueTruncated = useFileLibraryStore((state) => state.organizeQueueTruncated);
+  const isLoadingOrganizeQueue = useFileLibraryStore((state) => state.isLoadingOrganizeQueue);
+  const loadOrganizeQueue = useFileLibraryStore((state) => state.loadOrganizeQueue);
   const scope = useFileLibraryStore((state) => state.scope);
   const setScope = useFileLibraryStore((state) => state.setScope);
   const handleChooseFolders = useScanManagerStore((state) => state.handleChooseFolders);
@@ -70,14 +73,21 @@ export function HubView() {
   const scopeText = libraryScopeLabel(scope, t("allIndexedFiles"), t("noFolderSelected"));
   const isEmptyCurrentScanScope = scope.kind === "current_scan" && scope.roots.length === 0;
 
+  useEffect(() => {
+    if (isEmptyCurrentScanScope) return;
+    void loadOrganizeQueue(scope);
+  }, [isEmptyCurrentScanScope, loadOrganizeQueue, scope]);
+
   async function dispatchFiles() {
     if (isDispatching) return;
     setIsDispatching(true);
     try {
       await runDispatch();
-      setIsDispatching(false);
+      await loadOrganizeQueue(scope);
       setView("preview");
     } catch {
+      // Operation store owns dispatch error reporting.
+    } finally {
       setIsDispatching(false);
     }
   }
@@ -106,8 +116,14 @@ export function HubView() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-auto xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.4fr)] xl:overflow-hidden">
-      <section className={cn(panelSurface, "flex flex-col gap-4 overflow-hidden")}>
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      {organizeQueueTruncated && (
+        <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-800 dark:text-amber-200">
+          {t("organizeQueueTruncatedWarning")}
+        </div>
+      )}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.4fr)] xl:overflow-hidden">
+        <section className={cn(panelSurface, "flex flex-col gap-4 overflow-hidden")}>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-lg font-semibold">{t("inboxStack")}</h2>
@@ -115,7 +131,7 @@ export function HubView() {
           </div>
           <span className={mutedText}>{pendingFiles.length} {t("items")}</span>
         </div>
-        <VirtualFileCardList files={pendingFiles} onError={onError} t={t} />
+        <VirtualFileCardList files={pendingFiles} isLoading={isLoadingOrganizeQueue} onError={onError} t={t} />
         <motion.button
           className={cn(glassButtonPrimary, "w-full")}
           onClick={dispatchFiles}
@@ -124,9 +140,9 @@ export function HubView() {
         >
           {isDispatching ? t("dispatching") : t("runDispatch")}
         </motion.button>
-      </section>
+        </section>
 
-      <motion.section className="grid min-h-0 grid-cols-1 gap-4 overflow-auto pr-1 xl:grid-cols-2" variants={listMotion} initial="hidden" animate="show">
+        <motion.section className="grid min-h-0 grid-cols-1 gap-4 overflow-auto pr-1 xl:grid-cols-2" variants={listMotion} initial="hidden" animate="show">
         {buckets.map((bucket) => {
           const bucketFiles = bucketedFiles[bucket.key];
           return (
@@ -143,21 +159,24 @@ export function HubView() {
                 </div>
                 <span className={cn("rounded-full border px-2 py-1 text-xs font-semibold", toneClasses(bucket.tone))}>{bucketFiles.length}</span>
               </div>
-              <VirtualBucketFileList files={bucketFiles} setView={setView} waitingLabel={t("waitingFlow")} />
+              <VirtualBucketFileList files={bucketFiles} isLoading={isLoadingOrganizeQueue} loadingLabel={t("loading")} setView={setView} waitingLabel={t("waitingFlow")} />
             </motion.div>
           );
         })}
-      </motion.section>
+        </motion.section>
+      </div>
     </div>
   );
 }
 
 function VirtualFileCardList({
   files,
+  isLoading,
   onError,
   t
 }: {
   files: FileRecord[];
+  isLoading: boolean;
   onError: (message: string) => void;
   t: Translator;
 }) {
@@ -169,6 +188,16 @@ function VirtualFileCardList({
     estimateSize: () => HUB_FILE_ROW_HEIGHT,
     overscan: 8
   });
+
+  if (isLoading) {
+    return (
+      <div className="min-h-0 flex-1">
+        <div className={cn(emptyState, "h-full")}>
+          <span>{t("loading")}</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!files.length) {
     return (
@@ -216,10 +245,14 @@ function VirtualFileCardList({
 
 function VirtualBucketFileList({
   files,
+  isLoading,
+  loadingLabel,
   setView,
   waitingLabel
 }: {
   files: FileRecord[];
+  isLoading: boolean;
+  loadingLabel: string;
   setView: (view: View) => void;
   waitingLabel: string;
 }) {
@@ -231,6 +264,14 @@ function VirtualBucketFileList({
     estimateSize: () => BUCKET_FILE_ROW_HEIGHT,
     overscan: 8
   });
+
+  if (isLoading) {
+    return (
+      <div className={cn(emptyState, "min-h-32")}>
+        <span>{loadingLabel}</span>
+      </div>
+    );
+  }
 
   if (!files.length) {
     return (

@@ -22,7 +22,10 @@ export function ScannerView() {
   const scanProgress = scanState.progress;
   const warningCount = scanProgress?.errors ?? 0;
   const scopedTotalSize = stats.totalSize;
-  const diskUsageRatio = stats.diskTotalSize > 0 ? Math.min(1, stats.totalSize / stats.diskTotalSize) : 0;
+  // 注意：此处计算的是"已索引数据占磁盘总容量的比例"（扫描覆盖率），
+  // 与后端 StatsSummary.diskUsageRatio（真实磁盘占用率 = 1 - 可用/总）含义不同，
+  // 命名相似但语义不同，此处刻意使用本地计算值。
+  const scannedDiskCoverageRatio = stats.diskTotalSize > 0 ? Math.min(1, stats.totalSize / stats.diskTotalSize) : 0;
   const clutterItems = files.filter((file) => file.requires_confirmation || file.is_duplicate || file.size > 1024 * 1024 * 1024).length;
   const clutterRatio = files.length ? Math.min(1, clutterItems / files.length) : 0;
   const scopeLabel = libraryScopeLabel(scope, t("allIndexedFiles"), selectedFolders[0] ?? t("userSpaceHint"));
@@ -39,7 +42,7 @@ export function ScannerView() {
           style={{
             background: isScanning
               ? "linear-gradient(135deg, rgba(59,130,246,0.34), rgba(16,185,129,0.16))"
-              : `conic-gradient(#3b82f6 0 ${Math.round(diskUsageRatio * 100)}%, rgba(59,130,246,0.10) ${Math.round(diskUsageRatio * 100)}% 100%)`
+              : `conic-gradient(#3b82f6 0 ${Math.round(scannedDiskCoverageRatio * 100)}%, rgba(59,130,246,0.10) ${Math.round(scannedDiskCoverageRatio * 100)}% 100%)`
           } as CSSProperties}
         >
           <div className="grid h-full w-full place-items-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-8 backdrop-blur-3xl">
@@ -72,7 +75,7 @@ export function ScannerView() {
                 </strong>
                 <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-white/40 px-3 py-1 text-sm text-[var(--muted)] dark:bg-white/5">
                   <i className="h-2 w-2 rounded-full bg-emerald-500" />
-                  <span>{percent(diskUsageRatio)}</span>
+                  <span>{percent(scannedDiskCoverageRatio)}</span>
                 </div>
               </>
             )}

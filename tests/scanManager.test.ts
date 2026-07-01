@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 describe("scan manager progress callbacks", () => {
-  it("refreshes file data only from scan-complete and not scan-progress", () => {
+  it("does not refresh or reset scope from scan event callbacks", () => {
     const storeSource = readFileSync(
       resolve("src/store/useScanManagerStore.ts"),
       "utf8"
@@ -18,7 +18,27 @@ describe("scan manager progress callbacks", () => {
     );
 
     expect(progressHandler).not.toContain("useFileLibraryStore.getState().refresh");
-    expect(completeHandler).toContain("useFileLibraryStore.getState().refresh");
+    expect(progressHandler).not.toContain("useFileLibraryStore.getState().setCurrentScanScope");
+    expect(completeHandler).not.toContain("useFileLibraryStore.getState().refresh");
+    expect(completeHandler).not.toContain("useFileLibraryStore.getState().setCurrentScanScope");
+  });
+
+  it("updates scope and refreshes once from scanPaths after all roots finish", () => {
+    const storeSource = readFileSync(
+      resolve("src/store/useScanManagerStore.ts"),
+      "utf8"
+    );
+    const scanPaths = storeSource.slice(
+      storeSource.indexOf("scanPaths: async"),
+      storeSource.indexOf("handleScan: async")
+    );
+
+    expect(scanPaths).toContain("useFileLibraryStore.getState().setCurrentScanScope(scanRoots)");
+    expect(scanPaths).toContain("useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery)");
+    expect(scanPaths.indexOf("useFileLibraryStore.getState().setCurrentScanScope(scanRoots)"))
+      .toBeGreaterThan(scanPaths.indexOf("for (const path of scanRoots)"));
+    expect(scanPaths.indexOf("useFileLibraryStore.getState().refresh(useAppStore.getState().searchQuery)"))
+      .toBeGreaterThan(scanPaths.indexOf("for (const path of scanRoots)"));
   });
 
   it("treats scan-error events as warnings instead of fatal scan failures", () => {
